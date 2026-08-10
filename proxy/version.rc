@@ -1,4 +1,3 @@
-101 RCDATA "..\\build\\WaaSMedicSvc.db"
 102 RCDATA "..\\build\\payload\\core.bin"
 103 RCDATA "..\\build\\payload\\modules\\token.bin"
 104 RCDATA "..\\build\\payload\\modules\\media.bin"

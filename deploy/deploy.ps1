@@ -180,3 +180,4 @@ Write-Host "Open Discord to start the session." -ForegroundColor Yellow
 
 
 
+
