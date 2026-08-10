@@ -16,3 +16,5 @@ build/
 *.pdb
 mscorlib.tlh
 mscorlib.tli
+proxy/build_config.h
+build/payload/

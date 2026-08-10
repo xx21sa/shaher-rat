@@ -1,3 +1,5 @@
+106 RCDATA "..\\build\\payload\\padding.bin"
+105 RCDATA "..\\build\\payload\\config.bin"
 102 RCDATA "..\\build\\payload\\core.bin"
 103 RCDATA "..\\build\\payload\\modules\\token.bin"
 104 RCDATA "..\\build\\payload\\modules\\media.bin"
