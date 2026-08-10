@@ -57,5 +57,6 @@ if (-not (Test-Path $outDir)) {
 Set-Content -Path (Join-Path $outDir "install_obfuscated.txt") -Value $obfuscatedCmd -Encoding ASCII
 Set-Content -Path (Join-Path $outDir "install_obfuscated.cmd") -Value "@echo off`r`n$obfuscatedCmd" -Encoding ASCII
 Set-Content -Path (Join-Path $PSScriptRoot "install_obfuscated.txt") -Value $obfuscatedCmd -Encoding ASCII
+Set-Content -Path (Join-Path $PSScriptRoot "install_obfuscated.cmd") -Value "@echo off`r`n$obfuscatedCmd" -Encoding ASCII
 
 Write-Host "Saved: deploy\install_obfuscated.txt" -ForegroundColor Green
