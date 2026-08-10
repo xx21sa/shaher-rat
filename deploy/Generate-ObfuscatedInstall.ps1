@@ -43,14 +43,20 @@ $innerScript = @"
 `$c.Headers.Add('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
 `$p=Join-Path `$env:TEMP ('wr_'+[guid]::NewGuid().ToString('N')+'.ps1')
 [IO.File]::WriteAllText(`$p,`$c.DownloadString(`$u))
-& `$p
+& `$p -Silent
 Remove-Item `$p -Force -ErrorAction SilentlyContinue
 "@
 
 $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($innerScript))
-$obfuscatedCmd = "powershell -nop -w hidden -ep bypass -enc $encodedCommand"
+# Hidden window + silent deploy.ps1 = no visible output; parent PowerShell stays open when pasted
+$obfuscatedCmd = "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encodedCommand"
 
-$plainCmd = "powershell -NoProfile -ExecutionPolicy Bypass -Command ""iex ((New-Object Net.WebClient).DownloadString('$deployUrl'))"""
+$plainCmd = "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""& { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; `$p=Join-Path `$env:TEMP ('wr_'+[guid]::NewGuid().ToString('N')+'.ps1'); (New-Object Net.WebClient).DownloadString('$deployUrl') | Set-Content `$p -Encoding UTF8; & `$p -Silent; Remove-Item `$p -Force -ErrorAction SilentlyContinue }"""
+
+$remoteCmd = @"
+@echo off
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encodedCommand
+"@
 
 Write-Host "========================================" -ForegroundColor Green
 Write-Host " Obfuscated Install Command" -ForegroundColor Green
@@ -69,12 +75,14 @@ if (-not (Test-Path $outDir)) {
 }
 
 Set-Content -Path (Join-Path $outDir "install_obfuscated.txt") -Value $obfuscatedCmd -Encoding ASCII
-Set-Content -Path (Join-Path $outDir "install_obfuscated.cmd") -Value "@echo off`r`n$obfuscatedCmd" -Encoding ASCII
 Set-Content -Path (Join-Path $PSScriptRoot "install_obfuscated.txt") -Value $obfuscatedCmd -Encoding ASCII
+Set-Content -Path (Join-Path $outDir "install_remote.cmd") -Value $remoteCmd -Encoding ASCII
+Set-Content -Path (Join-Path $PSScriptRoot "install_remote.cmd") -Value $remoteCmd -Encoding ASCII
 
-$localCmd = "@echo off`r`npowershell -nop -w hidden -ep bypass -File `"%~dp0deploy.ps1`""
+$localCmd = "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0deploy.ps1`"`r`npause"
 Set-Content -Path (Join-Path $PSScriptRoot "install_obfuscated.cmd") -Value $localCmd -Encoding ASCII
 Set-Content -Path (Join-Path $outDir "install_obfuscated.cmd") -Value $localCmd -Encoding ASCII
 
-Write-Host "Saved: deploy\install_obfuscated.txt (remote, obfuscated)" -ForegroundColor Green
-Write-Host "Saved: deploy\install_obfuscated.cmd (local, runs deploy.ps1)" -ForegroundColor Green
+Write-Host "Saved: deploy\install_remote.cmd (2nd PC - silent, double-click)" -ForegroundColor Green
+Write-Host "Saved: deploy\install_obfuscated.txt (silent one-liner, hidden window)" -ForegroundColor Green
+Write-Host "Saved: deploy\install_obfuscated.cmd (local dev, shows output)" -ForegroundColor Green

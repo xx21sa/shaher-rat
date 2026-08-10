@@ -1,2 +1,3 @@
 @echo off
-powershell -nop -w hidden -ep bypass -File "%~dp0deploy.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy.ps1"
+pause

