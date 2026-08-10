@@ -1,0 +1,16 @@
+# Secrets
+Discord rat/settings.cs
+
+# Build output
+build/
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+
+# Temp
+*.obj
+*.exp
+*.lib
+*.pdb

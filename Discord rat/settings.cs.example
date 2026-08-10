@@ -1,0 +1,8 @@
+namespace Discord_rat
+{
+    class settings
+    {
+        public static string Bottoken = "YOUR_BOT_TOKEN_HERE";
+        public static string Guildid = "YOUR_GUILD_ID_HERE";
+    }
+}

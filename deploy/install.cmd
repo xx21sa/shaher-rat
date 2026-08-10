@@ -1,0 +1,3 @@
+@echo off
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/deploy/deploy.ps1'))"
+pause
