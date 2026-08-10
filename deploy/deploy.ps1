@@ -2,7 +2,7 @@
 # Edit GitHubBaseUrl below OR pass: deploy.ps1 -GitHubBaseUrl "https://raw.githubusercontent.com/user/repo/main/deploy"
 
 param(
-    [string]$GitHubBaseUrl = "https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/deploy"
+    [string]$GitHubBaseUrl = "https://raw.githubusercontent.com/xx21sa/shaher-rat/main/deploy"
 )
 
 $ErrorActionPreference = "Stop"
