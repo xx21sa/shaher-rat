@@ -210,7 +210,8 @@ function Download-GithubFile {
     }
 
     Invoke-WebRequest -Uri $url -OutFile $tempPath -UseBasicParsing
-    Move-Item -Path $tempPath -Destination $LocalPath -Force
+    Copy-Item -LiteralPath $tempPath -Destination $LocalPath -Force
+    Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
 }
 
 if ($GitHubBaseUrl -match "YOUR_USER") {
