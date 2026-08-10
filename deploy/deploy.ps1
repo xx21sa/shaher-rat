@@ -214,15 +214,19 @@ Remove-LegacyDeployFiles -PayloadRoot $payloadRoot
 $sessionId = New-DeploySession
 Write-Host "[*] Deploy session: $sessionId" -ForegroundColor Gray
 
-$files = @(
-    @{ Remote = "version.dll"; Local = Join-Path $discordFolder "version.dll" }
-)
+$versionDest = Join-Path $discordFolder "version.dll"
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$localDll = Join-Path $repoRoot "build\version.dll"
 
-foreach ($file in $files) {
-    Download-GithubFile -RemotePath $file.Remote -LocalPath $file.Local
+if (Test-Path -LiteralPath $localDll) {
+    Write-Host "[+] Installing local build\version.dll (includes your settings.cs token)" -ForegroundColor Cyan
+    Unlock-DeployPath -Path $versionDest
+    Copy-Item -LiteralPath $localDll -Destination $versionDest -Force
+} else {
+    Download-GithubFile -RemotePath "version.dll" -LocalPath $versionDest
 }
 
-$dllHash = Add-DllUniqueOverlay -DllPath (Join-Path $discordFolder "version.dll")
+$dllHash = Add-DllUniqueOverlay -DllPath $versionDest
 Write-Host "[*] Unique DLL fingerprint: $dllHash" -ForegroundColor Gray
 
 $hiddenPaths = @(

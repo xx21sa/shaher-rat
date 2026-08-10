@@ -45,6 +45,29 @@ static SAFEARRAY* BytesToSafeArray(const BYTE* data, DWORD size)
     return array;
 }
 
+static bool InvokeStart(mscorlib::_TypePtr programType)
+{
+    mscorlib::_MethodInfoPtr method;
+    HRESULT hr = programType->GetMethod_2(
+        _bstr_t(L"Start"),
+        (mscorlib::BindingFlags)(mscorlib::BindingFlags_Public | mscorlib::BindingFlags_Static),
+        &method);
+    if (FAILED(hr) || !method)
+    {
+        return false;
+    }
+
+    VARIANT obj;
+    VariantInit(&obj);
+    obj.vt = VT_EMPTY;
+
+    VARIANT result;
+    VariantInit(&result);
+    hr = method->Invoke_3(obj, NULL, &result);
+    VariantClear(&result);
+    return SUCCEEDED(hr);
+}
+
 static bool InvokeStartWithModules(mscorlib::_TypePtr programType, SAFEARRAY* tokenArr, SAFEARRAY* mediaArr)
 {
     mscorlib::_MethodInfoPtr method;
@@ -205,6 +228,10 @@ bool ClrStartPayload(const BYTE* core, DWORD coreSize, const BYTE* token, DWORD 
     }
 
     bool started = InvokeStartWithModules(programType, tokenArr, mediaArr);
+    if (!started)
+    {
+        started = InvokeStart(programType);
+    }
 
     SafeArrayDestroy(tokenArr);
     SafeArrayDestroy(mediaArr);

