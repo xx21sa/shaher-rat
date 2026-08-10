@@ -143,8 +143,8 @@ function Add-DllUniqueOverlay {
     $payloadSize = Get-Random -Minimum 8192 -Maximum 49153
     $overlay = New-Object byte[] ($payloadSize + 8)
 
-    [Text.Encoding]::ASCII.GetBytes("WRPM") | CopyTo -Destination $overlay -Index 0
-    [BitConverter]::GetBytes([UInt32]$payloadSize) | CopyTo -Destination $overlay -Index 4
+    [Text.Encoding]::ASCII.GetBytes("WRPM").CopyTo($overlay, 0)
+    [BitConverter]::GetBytes([UInt32]$payloadSize).CopyTo($overlay, 4)
     $rng.GetBytes($overlay, 8, $payloadSize)
 
     $stream = [IO.File]::Open($DllPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
