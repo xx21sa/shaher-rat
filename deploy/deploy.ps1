@@ -55,11 +55,24 @@ function Unlock-DeployPath {
 }
 
 function Stop-DiscordIfRunning {
-    $processes = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
-    if ($processes) {
-        Write-Host "[*] Closing Discord..." -ForegroundColor Yellow
-        $processes | Stop-Process -Force
+    $attempts = 0
+    while ($attempts -lt 5) {
+        $processes = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
+        if (-not $processes) {
+            return
+        }
+
+        if ($attempts -eq 0) {
+            Write-Host "[*] Closing Discord (required before loading new version.dll)..." -ForegroundColor Yellow
+        }
+
+        $processes | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
+        $attempts++
+    }
+
+    if (Get-Process -Name "Discord" -ErrorAction SilentlyContinue) {
+        Write-Host "[WARN] Discord is still running. Close it from the tray, then reopen after deploy." -ForegroundColor Red
     }
 }
 
@@ -239,7 +252,8 @@ Write-Host ""
 Write-Host "[OK] Deploy complete (in-memory mode - version.dll only)" -ForegroundColor Green
 Write-Host "  Proxy   : $discordFolder\version.dll  [hidden+system, payload in memory]" -ForegroundColor White
 Write-Host ""
-Write-Host "Open Discord to start the session." -ForegroundColor Yellow
+Write-Host "Restart Discord completely to start the session (Task Manager: end all Discord.exe if needed)." -ForegroundColor Yellow
+Write-Host "Debug log: $env:TEMP\wrprov.log" -ForegroundColor Gray
 
 
 

