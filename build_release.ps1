@@ -156,7 +156,8 @@ function New-PolymorphicBuildConfig {
 
     $config = New-Object byte[] 18
     $config[0] = $xorKey
-    [Text.Encoding]::ASCII.GetBytes($buildId.PadRight(16).Substring(0, 16)).CopyTo($config, 1)
+    $idBytes = [Text.Encoding]::ASCII.GetBytes($buildId.PadRight(16).Substring(0, 16))
+    [Array]::Copy($idBytes, 0, $config, 1, $idBytes.Length)
 
     $payloadDir = "build\payload"
     New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
