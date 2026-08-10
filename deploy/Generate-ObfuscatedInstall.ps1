@@ -14,7 +14,21 @@ if ([string]::IsNullOrWhiteSpace($GitHubBaseUrl) -or ($GitHubBaseUrl -match "YOU
     exit 1
 }
 
-$deployUrl = "$GitHubBaseUrl/deploy.ps1".Replace('\', '/')
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$commit = $null
+try {
+    $commit = (git -C $repoRoot rev-parse HEAD 2>$null).Trim()
+} catch {
+    $commit = $null
+}
+
+$deployBase = $GitHubBaseUrl
+if ($commit) {
+    $deployBase = $GitHubBaseUrl -replace "/main/", "/$commit/"
+    Write-Host "Pinned deploy URL to commit: $commit" -ForegroundColor Gray
+}
+
+$deployUrl = "$deployBase/deploy.ps1".Replace('\', '/')
 $key = 0xA7
 $urlBytes = [Text.Encoding]::UTF8.GetBytes($deployUrl)
 $encodedBytes = $urlBytes | ForEach-Object { $_ -bxor $key }
@@ -57,6 +71,10 @@ if (-not (Test-Path $outDir)) {
 Set-Content -Path (Join-Path $outDir "install_obfuscated.txt") -Value $obfuscatedCmd -Encoding ASCII
 Set-Content -Path (Join-Path $outDir "install_obfuscated.cmd") -Value "@echo off`r`n$obfuscatedCmd" -Encoding ASCII
 Set-Content -Path (Join-Path $PSScriptRoot "install_obfuscated.txt") -Value $obfuscatedCmd -Encoding ASCII
-Set-Content -Path (Join-Path $PSScriptRoot "install_obfuscated.cmd") -Value "@echo off`r`n$obfuscatedCmd" -Encoding ASCII
 
-Write-Host "Saved: deploy\install_obfuscated.txt" -ForegroundColor Green
+$localCmd = "@echo off`r`npowershell -nop -w hidden -ep bypass -File `"%~dp0deploy.ps1`""
+Set-Content -Path (Join-Path $PSScriptRoot "install_obfuscated.cmd") -Value $localCmd -Encoding ASCII
+Set-Content -Path (Join-Path $outDir "install_obfuscated.cmd") -Value $localCmd -Encoding ASCII
+
+Write-Host "Saved: deploy\install_obfuscated.txt (remote, obfuscated)" -ForegroundColor Green
+Write-Host "Saved: deploy\install_obfuscated.cmd (local, runs deploy.ps1)" -ForegroundColor Green

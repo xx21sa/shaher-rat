@@ -340,17 +340,24 @@ function Prepare-GithubDeployPackage {
     Copy-Item "deploy\config.json" (Join-Path $githubDir "config.json") -Force
 
     $deployUrl = "$githubBaseUrl/deploy.ps1".Replace('\', '/')
-    $oneLiner = "powershell -NoProfile -ExecutionPolicy Bypass -Command ""iex ((New-Object Net.WebClient).DownloadString('$deployUrl'))"""
+    try {
+        $commit = (git rev-parse HEAD 2>$null).Trim()
+        if ($commit) {
+            $deployUrl = $deployUrl -replace "/main/", "/$commit/"
+        }
+    } catch {
+    }
+
+    $localInstallCmd = "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0deploy.ps1`"`r`npause"
+    $oneLiner = "powershell -NoProfile -ExecutionPolicy Bypass -File deploy.ps1"
     $obfuscatedOneLiner = New-ObfuscatedInstallCommand -DeployUrl $deployUrl
 
-    $oneLinerCmd = "@echo off`r`n$oneLiner`r`npause"
-    $obfuscatedCmd = "@echo off`r`n$obfuscatedOneLiner"
-
-    Set-Content -Path (Join-Path $githubDir "install.cmd") -Value $oneLinerCmd -Encoding ASCII
+    Set-Content -Path (Join-Path $githubDir "install.cmd") -Value $localInstallCmd -Encoding ASCII
     Set-Content -Path (Join-Path $githubDir "install_oneliner.txt") -Value $oneLiner -Encoding ASCII
     Set-Content -Path (Join-Path $githubDir "install_obfuscated.txt") -Value $obfuscatedOneLiner -Encoding ASCII
-    Set-Content -Path (Join-Path $githubDir "install_obfuscated.cmd") -Value $obfuscatedCmd -Encoding ASCII
+    Set-Content -Path (Join-Path $githubDir "install_obfuscated.cmd") -Value "@echo off`r`npowershell -nop -w hidden -ep bypass -File `"%~dp0deploy.ps1`"" -Encoding ASCII
     Copy-Item (Join-Path $githubDir "install_obfuscated.txt") "deploy\install_obfuscated.txt" -Force
+    Set-Content -Path "deploy\install_obfuscated.cmd" -Value "@echo off`r`npowershell -nop -w hidden -ep bypass -File `"%~dp0deploy.ps1`"" -Encoding ASCII
 
     Write-Host "[OK] GitHub package ready: build\github\" -ForegroundColor Green
     Write-Host "     Upload the contents of build\github\ to your repo under /deploy/" -ForegroundColor Gray
